@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "ssr-jira-mcp": {
+      "type": "stdio",
+      "command": "ssr-jira-mcp",
+      "description": "JIRA workflow tools for 128T and Mist instances: JQL query, issue fetch, add comment, attachment listing/downloading, field metadata discovery, options search, and safety-validated field updates",
+      "env": {
+        "JIRA_USER": "${JIRA_USER}",
+        "JIRA_API_TOKEN": "${JIRA_API_TOKEN}"
+      }
+    }
+  }
+}

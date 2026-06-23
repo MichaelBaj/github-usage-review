@@ -1,0 +1,538 @@
+"""Pull Copilot metrics + seats from GitHub and persist into SQLite.
+
+The Copilot metrics API returns up to the last 28 days as an array of
+day records. We upsert every day we receive so re-runs are idempotent
+and the local store grows beyond 28 days over time toward the 90-day
+exec view.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from collections import defaultdict
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import httpx
+
+from . import db
+from .config import BILLING_MIN_DATE, settings
+from .github_client import GitHubClient
+
+log = logging.getLogger(__name__)
+
+
+def _flatten_languages(day: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract per-(language, editor) aggregates from a metrics day record."""
+    rows: list[dict[str, Any]] = []
+    code = day.get("copilot_ide_code_completions") or {}
+    for editor in code.get("editors", []) or []:
+        editor_name = editor.get("name", "unknown")
+        for model in editor.get("models", []) or []:
+            for lang in model.get("languages", []) or []:
+                rows.append(
+                    {
+                        "language": lang.get("name", "unknown"),
+                        "editor": editor_name,
+                        "suggestions": lang.get("total_code_suggestions", 0) or 0,
+                        "acceptances": lang.get("total_code_acceptances", 0) or 0,
+                        "lines_suggested": lang.get("total_code_lines_suggested", 0) or 0,
+                        "lines_accepted": lang.get("total_code_lines_accepted", 0) or 0,
+                        "engaged_users": lang.get("total_engaged_users", 0) or 0,
+                    }
+                )
+    collapsed: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (row["language"], row["editor"])
+        if key not in collapsed:
+            collapsed[key] = row
+            continue
+        cur = collapsed[key]
+        for field in ("suggestions", "acceptances", "lines_suggested", "lines_accepted", "engaged_users"):
+            cur[field] += row[field]
+    return list(collapsed.values())
+
+
+def _flatten_editors(day: dict[str, Any]) -> list[dict[str, Any]]:
+    """Aggregate per-editor totals including chat events."""
+    code = day.get("copilot_ide_code_completions") or {}
+    chat = day.get("copilot_ide_chat") or {}
+
+    editor_rows: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "suggestions": 0,
+            "acceptances": 0,
+            "lines_suggested": 0,
+            "lines_accepted": 0,
+            "chat_total_chats": 0,
+            "chat_insertion_events": 0,
+            "chat_copy_events": 0,
+            "engaged_users": 0,
+        }
+    )
+
+    for editor in code.get("editors", []) or []:
+        name = editor.get("name", "unknown")
+        row = editor_rows[name]
+        row["engaged_users"] = max(row["engaged_users"], editor.get("total_engaged_users", 0) or 0)
+        for model in editor.get("models", []) or []:
+            for lang in model.get("languages", []) or []:
+                row["suggestions"] += lang.get("total_code_suggestions", 0) or 0
+                row["acceptances"] += lang.get("total_code_acceptances", 0) or 0
+                row["lines_suggested"] += lang.get("total_code_lines_suggested", 0) or 0
+                row["lines_accepted"] += lang.get("total_code_lines_accepted", 0) or 0
+
+    for editor in chat.get("editors", []) or []:
+        name = editor.get("name", "unknown")
+        row = editor_rows[name]
+        for model in editor.get("models", []) or []:
+            row["chat_total_chats"] += model.get("total_chats", 0) or 0
+            row["chat_insertion_events"] += model.get("total_chat_insertion_events", 0) or 0
+            row["chat_copy_events"] += model.get("total_chat_copy_events", 0) or 0
+
+    return [{"editor": name, **values} for name, values in editor_rows.items()]
+
+
+def _flatten_models(day: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten a metrics day into per-(editor, model, is_chat) rows.
+
+    Combines code-completion and chat trees so a single table can drive
+    "model usage" charts for code AND chat.
+    """
+    rows: dict[tuple[str, str, int], dict[str, Any]] = {}
+
+    def _bucket(editor: str, model: str, is_chat: int) -> dict[str, Any]:
+        key = (editor, model, is_chat)
+        if key not in rows:
+            rows[key] = {
+                "editor": editor,
+                "model": model,
+                "is_chat": is_chat,
+                "suggestions": 0,
+                "acceptances": 0,
+                "lines_suggested": 0,
+                "lines_accepted": 0,
+                "chats": 0,
+                "chat_insertions": 0,
+                "chat_copies": 0,
+                "engaged_users": 0,
+            }
+        return rows[key]
+
+    code = day.get("copilot_ide_code_completions") or {}
+    for editor in code.get("editors", []) or []:
+        editor_name = editor.get("name", "unknown")
+        for model in editor.get("models", []) or []:
+            model_name = model.get("name") or "default"
+            bucket = _bucket(editor_name, model_name, 0)
+            bucket["engaged_users"] = max(
+                bucket["engaged_users"], model.get("total_engaged_users", 0) or 0
+            )
+            for lang in model.get("languages", []) or []:
+                bucket["suggestions"] += lang.get("total_code_suggestions", 0) or 0
+                bucket["acceptances"] += lang.get("total_code_acceptances", 0) or 0
+                bucket["lines_suggested"] += lang.get("total_code_lines_suggested", 0) or 0
+                bucket["lines_accepted"] += lang.get("total_code_lines_accepted", 0) or 0
+
+    chat = day.get("copilot_ide_chat") or {}
+    for editor in chat.get("editors", []) or []:
+        editor_name = editor.get("name", "unknown")
+        for model in editor.get("models", []) or []:
+            model_name = model.get("name") or "default"
+            bucket = _bucket(editor_name, model_name, 1)
+            bucket["engaged_users"] = max(
+                bucket["engaged_users"], model.get("total_engaged_users", 0) or 0
+            )
+            bucket["chats"] += model.get("total_chats", 0) or 0
+            bucket["chat_insertions"] += model.get("total_chat_insertion_events", 0) or 0
+            bucket["chat_copies"] += model.get("total_chat_copy_events", 0) or 0
+
+    return list(rows.values())
+
+
+def _normalize_repo(repo: dict[str, Any]) -> dict[str, Any]:
+    """Project a GitHub repo record into our storage row.
+
+    Uses ``pushed_at`` (preferred) or ``updated_at`` so that the stored
+    ``updated_at`` column reflects when the repo last received commits —
+    enabling the skip-unchanged-repos optimization during PR ingestion.
+    """
+    return {
+        "name": repo.get("name") or "",
+        "full_name": repo.get("full_name") or "",
+        "archived": 1 if repo.get("archived") else 0,
+        "fork": 1 if repo.get("fork") else 0,
+        "default_branch": repo.get("default_branch"),
+        "updated_at": repo.get("pushed_at") or repo.get("updated_at"),
+    }
+
+
+def _normalize_pr_list_item(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
+    """Project the PR list payload into storage shape (no addition/deletion yet)."""
+    user = pr.get("user") or {}
+    base = pr.get("base") or {}
+    head = pr.get("head") or {}
+    state = pr.get("state") or "open"
+    if pr.get("merged_at"):
+        state = "merged"
+    return {
+        "repo": repo,
+        "number": pr.get("number") or 0,
+        "author": user.get("login"),
+        "state": state,
+        "created_at": pr.get("created_at"),
+        "merged_at": pr.get("merged_at"),
+        "closed_at": pr.get("closed_at"),
+        "additions": 0,
+        "deletions": 0,
+        "changed_files": 0,
+        "comments": pr.get("comments") or 0,
+        "review_comments": pr.get("review_comments") or 0,
+        "commits": 0,
+        "title": pr.get("title"),
+        "base_ref": base.get("ref"),
+        "head_ref": head.get("ref"),
+    }
+
+
+def _merge_pr_detail(base_row: dict[str, Any], detail: dict[str, Any]) -> dict[str, Any]:
+    """Layer detail-endpoint fields (additions/deletions/etc.) onto a list-row."""
+    return {
+        **base_row,
+        "additions": detail.get("additions") or 0,
+        "deletions": detail.get("deletions") or 0,
+        "changed_files": detail.get("changed_files") or 0,
+        "commits": detail.get("commits") or 0,
+        "comments": detail.get("comments") or base_row.get("comments") or 0,
+        "review_comments": detail.get("review_comments") or base_row.get("review_comments") or 0,
+    }
+
+
+async def _ingest_pr_activity(gh: GitHubClient, since_iso: str) -> dict[str, Any]:
+    """Fetch repos + PRs (created on/after ``since_iso``) across the org.
+
+    Returns a summary dict with repo/PR counts. PRs are upserted into
+    ``pull_requests``; repos into ``repos``.
+
+    Optimizations to minimise API calls:
+    * Repos whose ``pushed_at`` is unchanged since last snapshot are skipped
+      entirely (no list-pulls request).
+    * By default (``pr_fetch_detail=False``) only list-level PR metadata is
+      stored — **no per-PR detail API call**. Set ``PR_FETCH_DETAIL=true``
+      to fetch additions/deletions/changed_files at the cost of one extra
+      API call per new PR.
+    * When detail fetching is on, PRs already stored with non-zero detail
+      data skip the individual detail call.
+    """
+    summary: dict[str, Any] = {
+        "repos_scanned": 0,
+        "prs_upserted": 0,
+        "repos_skipped_unchanged": 0,
+        "pr_details_skipped": 0,
+        "pr_detail_fetch": settings.pr_fetch_detail,
+    }
+    try:
+        raw_repos = await gh.list_org_repos()
+    except httpx.HTTPStatusError as exc:
+        log.warning("list_org_repos failed (%s); PR ingestion skipped", exc.response.status_code)
+        summary["repos_error"] = str(exc.response.status_code)
+        return summary
+
+    filtered: list[dict[str, Any]] = []
+    for r in raw_repos:
+        if not settings.pr_include_forks and r.get("fork"):
+            continue
+        if not settings.pr_include_archived and r.get("archived"):
+            continue
+        filtered.append(r)
+    filtered.sort(key=lambda r: r.get("pushed_at") or r.get("updated_at") or "", reverse=True)
+    filtered = filtered[: settings.pr_max_repos]
+    db.replace_repos([_normalize_repo(r) for r in filtered])
+    summary["repos_total"] = len(raw_repos)
+
+    semaphore = asyncio.Semaphore(max(1, settings.pr_concurrency))
+
+    async def _enrich(repo_name: str, row: dict[str, Any]) -> dict[str, Any] | None:
+        async with semaphore:
+            try:
+                detail = await gh.get_pull_request(repo_name, row["number"])
+            except httpx.HTTPStatusError as exc:
+                log.info("PR detail skip %s#%s: %s", repo_name, row["number"], exc.response.status_code)
+                return row
+            return _merge_pr_detail(row, detail)
+
+    total_prs = 0
+    repos_skipped = 0
+    details_skipped = 0
+    for repo in filtered:
+        repo_name = repo.get("name") or ""
+        if not repo_name:
+            continue
+
+        # Skip repos with no pushes since last scan.
+        pushed_at = repo.get("pushed_at") or repo.get("updated_at") or ""
+        prev_updated, _prev_fetched = db.get_repo_last_fetched(repo_name)
+        if prev_updated and pushed_at and pushed_at <= prev_updated:
+            repos_skipped += 1
+            continue
+
+        list_rows: list[dict[str, Any]] = []
+        try:
+            async for pr in gh.list_repo_pulls(repo_name, state="all", since_iso=since_iso):
+                list_rows.append(_normalize_pr_list_item(repo_name, pr))
+        except httpx.HTTPStatusError as exc:
+            log.info("list_repo_pulls skip %s: %s", repo_name, exc.response.status_code)
+            continue
+        if not list_rows:
+            continue
+
+        if settings.pr_fetch_detail:
+            # Optional: fetch individual PR detail for additions/deletions.
+            known_prs = db.existing_pr_numbers(repo_name)
+            need_detail: list[dict[str, Any]] = []
+            already_list: list[dict[str, Any]] = []
+            for row in list_rows:
+                if row["number"] in known_prs:
+                    already_list.append(row)
+                    details_skipped += 1
+                else:
+                    need_detail.append(row)
+            if need_detail:
+                detailed = await asyncio.gather(
+                    *(_enrich(repo_name, row) for row in need_detail),
+                    return_exceptions=False,
+                )
+                to_upsert = [r for r in detailed if r is not None] + already_list
+            else:
+                to_upsert = already_list
+        else:
+            # Default: store list-level metadata only — zero extra API calls.
+            to_upsert = list_rows
+
+        if to_upsert:
+            db.upsert_pull_requests(to_upsert)
+            total_prs += len(to_upsert)
+
+    summary["repos_scanned"] = len(filtered) - repos_skipped
+    summary["repos_skipped_unchanged"] = repos_skipped
+    summary["prs_upserted"] = total_prs
+    summary["pr_details_skipped"] = details_skipped
+    return summary
+
+
+def _flatten_billing_usage(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Project enhanced-billing ``usageItems`` into storage rows.
+
+    The endpoint shape (paraphrased):
+
+    .. code-block:: json
+
+        {"usageItems": [
+            {"date": "2026-06-01", "product": "Copilot",
+             "sku": "Copilot Premium Request",
+             "unitType": "request", "quantity": 12,
+             "grossAmount": 0.48, "discountAmount": 0,
+             "netAmount": 0.48,
+             "username": "alice", "repositoryName": ""}
+        ]}
+
+    Missing fields default safely so the storage row is always complete.
+    """
+    items = payload.get("usageItems") or []
+    out: list[dict[str, Any]] = []
+    for it in items:
+        raw_date = it.get("date") or it.get("usageAt") or ""
+        date = raw_date[:10] if isinstance(raw_date, str) else ""
+        if not date:
+            continue
+        if date < BILLING_MIN_DATE:
+            continue
+        out.append(
+            {
+                "date": date,
+                "login": (it.get("username") or "").lower(),
+                "product": it.get("product") or "Unknown",
+                "sku": it.get("sku") or "Unknown",
+                "unit_type": it.get("unitType") or "",
+                "quantity": float(it.get("quantity") or 0),
+                "gross_amount_usd": float(it.get("grossAmount") or 0),
+                "discount_amount_usd": float(it.get("discountAmount") or 0),
+                "net_amount_usd": float(it.get("netAmount") or 0),
+                "repository_name": it.get("repositoryName") or "",
+            }
+        )
+    return out
+
+
+async def _ingest_billing_usage(gh: GitHubClient) -> dict[str, Any]:
+    """Fetch enhanced billing usage; persist Copilot-related rows.
+
+    Falls back from org → enterprise scope on 404. Non-fatal on 403/404
+    (older tiers / disabled plans).
+    """
+    summary: dict[str, Any] = {"rows": 0}
+    try:
+        payload = await gh.org_billing_usage()
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404 and gh.enterprise:
+            try:
+                payload = await gh.enterprise_billing_usage()
+            except httpx.HTTPStatusError as exc2:
+                log.warning("enterprise billing usage failed (%s)", exc2.response.status_code)
+                summary["error"] = str(exc2.response.status_code)
+                return summary
+        else:
+            log.warning(
+                "org billing usage failed (%s); enhanced billing API may be "
+                "unavailable on this org tier. AI-credit metrics will "
+                "not populate.",
+                exc.response.status_code,
+            )
+            summary["error"] = str(exc.response.status_code)
+            return summary
+
+    rows = _flatten_billing_usage(payload)
+    db.upsert_billing_usage(rows)
+    summary["rows"] = len(rows)
+    summary["copilot_rows"] = sum(1 for r in rows if "copilot" in (r["product"] or "").lower())
+    return summary
+
+
+def _normalize_seat(seat: dict[str, Any]) -> dict[str, Any]:
+    """Flatten a seat record into the storage shape."""
+    assignee = seat.get("assignee") or {}
+    assigning_team = seat.get("assigning_team") or {}
+    return {
+        "login": assignee.get("login", "unknown"),
+        "team": assigning_team.get("slug"),
+        "assigning_team": assigning_team.get("name"),
+        "created_at": seat.get("created_at"),
+        "updated_at": seat.get("updated_at"),
+        "last_activity_at": seat.get("last_activity_at"),
+        "last_activity_editor": seat.get("last_activity_editor"),
+        "pending_cancellation_date": seat.get("pending_cancellation_date"),
+        "plan_type": seat.get("plan_type"),
+        "raw_json": json.dumps(seat),
+    }
+
+
+async def run_snapshot() -> dict[str, Any]:
+    """Pull all metrics + seats from GitHub and persist them.
+
+    Returns:
+        Summary dict with counts and start/end timestamps.
+    """
+    db.init_db()
+    summary: dict[str, Any] = {"started_at": datetime.now(UTC).isoformat()}
+
+    async with GitHubClient() as gh:
+        try:
+            days = await gh.org_metrics()
+        except httpx.HTTPStatusError as exc:
+            # GitHub returns 404 when org metrics are unavailable for legitimate
+            # reasons: fewer than 5 telemetry-enabled members in the window,
+            # Copilot Metrics API access disabled in org policy, or no Copilot
+            # subscription. Seats data is still useful, so don't abort the run.
+            if exc.response.status_code == 404:
+                log.warning(
+                    "org metrics 404 for %s; common causes: <5 telemetry-enabled "
+                    "members, Copilot Metrics API access disabled in org policy, "
+                    "or org lacks Copilot Business/Enterprise. Continuing with seats only.",
+                    gh.org,
+                )
+                days = []
+                summary["org_metrics_error"] = "404"
+            else:
+                raise
+        for day in days:
+            date = day.get("date")
+            if not date:
+                continue
+            db.upsert_org_day(
+                date,
+                day.get("total_active_users"),
+                day.get("total_engaged_users"),
+                day,
+            )
+            db.replace_language_rows(date, _flatten_languages(day))
+            db.replace_editor_rows(date, _flatten_editors(day))
+            db.replace_model_rows(date, "org", "", _flatten_models(day))
+        summary["org_days"] = len(days)
+
+        teams: list[dict[str, Any]] = []
+        try:
+            teams = await gh.list_teams()
+        except httpx.HTTPStatusError as exc:
+            log.warning(
+                "list_teams failed (%s); skipping per-team metrics. "
+                "Token likely lacks read:org scope or SSO authorization.",
+                exc.response.status_code,
+            )
+            summary["teams_error"] = str(exc.response.status_code)
+        team_count = 0
+        for team in teams:
+            slug = team.get("slug")
+            if not slug:
+                continue
+            try:
+                tdays = await gh.team_metrics(slug)
+            except httpx.HTTPStatusError as exc:
+                # 404 = team has no Copilot data or below privacy threshold; skip.
+                log.info("team %s metrics skipped: %s", slug, exc.response.status_code)
+                tdays = []
+            for record in tdays:
+                date = record.get("date")
+                if not date:
+                    continue
+                db.upsert_team_day(
+                    date,
+                    slug,
+                    record.get("total_active_users"),
+                    record.get("total_engaged_users"),
+                    record,
+                )
+                db.replace_team_language_rows(date, slug, _flatten_languages(record))
+                db.replace_model_rows(date, "team", slug, _flatten_models(record))
+            if tdays:
+                team_count += 1
+            # Refresh team membership so per-user views can roll up PR data by team.
+            try:
+                members = await gh.list_team_members(slug)
+                db.replace_team_members(slug, [m.get("login") for m in members if m.get("login")])
+            except httpx.HTTPStatusError as exc:
+                log.info("list_team_members skip %s: %s", slug, exc.response.status_code)
+        summary["teams_with_metrics"] = team_count
+        summary["teams_total"] = len(teams)
+
+        try:
+            seats_raw = await gh.list_seats()
+            db.replace_seats([_normalize_seat(s) for s in seats_raw])
+            summary["seats"] = len(seats_raw)
+        except httpx.HTTPStatusError as exc:
+            log.warning("list_seats failed (%s); seats not refreshed.", exc.response.status_code)
+            summary["seats_error"] = str(exc.response.status_code)
+            summary["seats"] = 0
+
+        if settings.pr_ingest_enabled:
+            since_dt = datetime.now(UTC) - timedelta(days=settings.pr_lookback_days)
+            since_iso = since_dt.isoformat()
+            try:
+                summary["pr_ingest"] = await _ingest_pr_activity(gh, since_iso)
+            except Exception:
+                log.exception("PR ingestion failed")
+                summary["pr_ingest_error"] = "exception"
+        else:
+            summary["pr_ingest"] = {"enabled": False}
+
+        try:
+            summary["billing_usage"] = await _ingest_billing_usage(gh)
+        except Exception:
+            log.exception("billing usage ingestion failed")
+            summary["billing_usage_error"] = "exception"
+
+    summary["finished_at"] = datetime.now(UTC).isoformat()
+    db.set_meta("last_snapshot_at", summary["finished_at"])
+    db.set_meta("last_data_load_at", summary["finished_at"])
+    db.set_meta("last_data_load_source", "api")
+    return summary

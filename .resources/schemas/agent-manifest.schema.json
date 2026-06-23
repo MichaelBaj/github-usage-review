@@ -1,0 +1,187 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://github.com/ai-keel/schemas/agent-manifest.schema.json",
+    "title": "ai-keel Manifest",
+    "description": "Schema for manifest.yml — declares resources and their routing configuration",
+    "type": "object",
+    "required": [
+        "version",
+        "resources"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "version": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+\\.\\d+$",
+            "description": "Manifest schema version (semver)"
+        },
+        "resources": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/resource"
+            },
+            "description": "List of all managed resources"
+        },
+        "mcp_servers": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/mcp-server"
+            },
+            "description": "List of managed MCP routing entries"
+        }
+    },
+    "$defs": {
+        "resource": {
+            "type": "object",
+            "required": [
+                "path",
+                "type",
+                "description"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9.-]+(/[a-z0-9.-]+)*\\.(md|py)$",
+                    "description": "Relative path within .resources/ (supports nested directories and root-level scripts; kebab-case or dot-separated names)"
+                },
+                "type": {
+                    "type": "string",
+                    "enum": [
+                        "skill",
+                        "agent",
+                        "prompt",
+                        "script"
+                    ],
+                    "description": "Resource category"
+                },
+                "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "One-line description of the resource"
+                },
+                "applies-to": {
+                    "type": "string",
+                    "default": "**/*",
+                    "description": "Glob pattern for when this resource applies"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9-]+$"
+                    },
+                    "default": [],
+                    "description": "Categorization tags (kebab-case)"
+                },
+                "internal": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, resource is internal-only (not deployed to consumer repos via routing)"
+                },
+                "agents": {
+                    "$ref": "#/$defs/agents-map",
+                    "description": "Per-agent routing configuration"
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": [
+                        "global",
+                        "repository",
+                        "dual"
+                    ],
+                    "description": "Deployment scope: global (home dirs), repository (repo .github/), or dual (global base + .local extension slot)"
+                }
+            }
+        },
+        "mcp-server": {
+            "type": "object",
+            "required": [
+                "name",
+                "scope",
+                "description",
+                "routing_files"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9-]*$",
+                    "description": "MCP server name in kebab-case"
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": [
+                        "global",
+                        "repository",
+                        "dual"
+                    ],
+                    "description": "Deployment scope for MCP routing files"
+                },
+                "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "One-line description of MCP server"
+                },
+                "routing_files": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "claude": {
+                            "type": "string",
+                            "pattern": "^routing/claude/mcp-servers/[a-z0-9._-]+\\.json$"
+                        },
+                        "copilot": {
+                            "type": "string",
+                            "pattern": "^routing/copilot/mcp-servers/[a-z0-9._-]+\\.json$"
+                        }
+                    },
+                    "minProperties": 1
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9-]+$"
+                    },
+                    "default": [],
+                    "description": "Categorization tags (kebab-case)"
+                }
+            }
+        },
+        "agents-map": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "claude": {
+                    "$ref": "#/$defs/agent-config"
+                },
+                "copilot": {
+                    "$ref": "#/$defs/agent-config"
+                }
+            }
+        },
+        "agent-config": {
+            "oneOf": [
+                {
+                    "type": "boolean"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true
+                        },
+                        "applies-to": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            ]
+        }
+    }
+}

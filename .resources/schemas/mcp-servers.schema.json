@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MCP Server List",
+  "description": "Canonical list of recommended MCP servers for ai-keel sync.",
+  "type": "object",
+  "required": ["servers"],
+  "properties": {
+    "servers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type", "command"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Transport type (e.g. stdio, sse)."
+          },
+          "command": {
+            "type": "string",
+            "description": "Command to launch the server."
+          },
+          "args": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Arguments passed to the command."
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Environment variables for the server process."
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": false
+}

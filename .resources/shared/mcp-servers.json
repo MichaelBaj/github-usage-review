@@ -1,0 +1,16 @@
+{
+  "servers": {
+    "github": {
+      "type": "stdio",
+      "command": "gh",
+      "args": ["copilot", "mcp-server"],
+      "env": {}
+    },
+    "fetch": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "env": {}
+    }
+  }
+}

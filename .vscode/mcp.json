@@ -1,0 +1,21 @@
+{
+  "servers": {
+    "fetch": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "mcp-server-fetch"
+      ],
+      "env": {}
+    },
+    "github": {
+      "type": "stdio",
+      "command": "gh",
+      "args": [
+        "copilot",
+        "mcp-server"
+      ],
+      "env": {}
+    }
+  }
+}
