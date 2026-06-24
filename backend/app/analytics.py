@@ -6,6 +6,7 @@ are bounded and rounded for direct presentation to the frontend.
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from datetime import date as date_cls
@@ -626,10 +627,10 @@ def model_breakdown(
         except Exception:
             billing_rows = []
 
-    # Build model→ai_credits lookup from billing data (case-insensitive).
+    # Build model→ai_credits lookup from billing data (normalized).
     credits_by_model: dict[str, float] = {}
     for br in billing_rows:
-        model_name = (br["model"] or _model_from_sku(br["sku"])).lower()
+        model_name = _normalize_model_name(br["model"] or _model_from_sku(br["sku"]))
         if model_name == "unspecified":
             continue
         credits_by_model[model_name] = (
@@ -641,9 +642,10 @@ def model_breakdown(
     for r in rows:
         sug = r["suggestions"] or 0
         acc = r["acceptances"] or 0
+        normalized = _normalize_model_name(r["model"])
         entry = {
             "editor": r["editor"],
-            "model": r["model"],
+            "model": normalized,
             "suggestions": sug,
             "acceptances": acc,
             "lines_suggested": r["lines_suggested"] or 0,
@@ -653,12 +655,17 @@ def model_breakdown(
             "chat_copies": r["chat_copies"] or 0,
             "engaged_users": r["engaged_users"] or 0,
             "acceptance_rate": round((acc / sug) if sug else 0.0, 4),
-            "ai_credits": credits_by_model.get((r["model"] or "").lower(), 0.0),
+            "ai_credits": credits_by_model.get(normalized, 0.0),
         }
         if r["is_chat"]:
             chat.append(entry)
         else:
             code.append(entry)
+
+    # Skip billing-only models (those without metrics data). These indicate
+    # a data misalignment between billing and metrics APIs and have no editor
+    # or usage context. Include only models with actual usage metrics.
+
     code.sort(key=lambda x: x["acceptances"], reverse=True)
     chat.sort(key=lambda x: x["chats"], reverse=True)
 
@@ -688,7 +695,7 @@ def model_breakdown(
                 except Exception:
                     billing_team = []
                 for br in billing_team:
-                    model_name = br["model"] or _model_from_sku(br["sku"])
+                    model_name = _normalize_model_name(br["model"] or _model_from_sku(br["sku"]))
                     code.append({
                         "editor": "",
                         "model": model_name,
@@ -1471,6 +1478,39 @@ def _model_from_sku(sku: str | None) -> str:
         if tail and tail.lower() not in {"request", "premium"}:
             return tail
     return "unspecified"
+
+
+# Regex: claude-{...}-{variant} where variant is a known Claude model tier.
+_CLAUDE_REORDER_RE = re.compile(r"^claude-(.+?)-(sonnet|opus|haiku)(.*)$")
+# Trailing version hyphens: -3-5 → -3.5 at end of string.
+_TRAILING_VERSION_RE = re.compile(r"-(\d+)-(\d+)$")
+
+
+def _normalize_model_name(name: str) -> str:
+    """Normalize a model name to a canonical lowercase-hyphenated form.
+
+    Handles the inconsistency between GitHub data sources:
+    - Metrics API: ``"claude-3.5-sonnet"`` (version before variant)
+    - Billing CSV: ``"Claude Sonnet 3.5"`` (Title Case, variant before version)
+    - SKU-derived: ``"Claude Sonnet 3.5"`` (from ``_model_from_sku``)
+
+    Canonical output: ``"claude-sonnet-3.5"``, ``"gpt-4o"``, ``"o3-mini"``.
+    """
+    if not name:
+        return "unknown"
+    # Lowercase, strip, replace spaces/underscores with hyphens.
+    s = name.strip().lower().replace(" ", "-").replace("_", "-")
+    # Collapse multiple hyphens.
+    s = re.sub(r"-{2,}", "-", s)
+    # Reorder claude-{version}-{variant} → claude-{variant}-{version}.
+    # Only triggers when a known variant (sonnet/opus/haiku) appears AFTER
+    # the version segment (e.g., "claude-3.5-sonnet" → "claude-sonnet-3.5").
+    m = _CLAUDE_REORDER_RE.match(s)
+    if m:
+        s = f"claude-{m.group(2)}-{m.group(1)}{m.group(3)}"
+    # Normalize trailing version hyphens: "claude-sonnet-3-5" → "claude-sonnet-3.5"
+    s = _TRAILING_VERSION_RE.sub(r"-\1.\2", s)
+    return s
 
 
 def ai_credits_summary(
