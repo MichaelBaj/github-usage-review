@@ -301,7 +301,6 @@ export function ModelTable({ data }: { data: ModelBreakdown }): JSX.Element {
             <th>Model</th>
             <th>Chats</th>
             <th>Insertions</th>
-            <th>Copies</th>
             <th>AI Credits</th>
           </tr>
         </thead>
@@ -312,13 +311,12 @@ export function ModelTable({ data }: { data: ModelBreakdown }): JSX.Element {
               <td>{r.model}</td>
               <td>{r.chats.toLocaleString()}</td>
               <td>{r.chat_insertions.toLocaleString()}</td>
-              <td>{r.chat_copies.toLocaleString()}</td>
               <td>{r.ai_credits.toLocaleString()}</td>
             </tr>
           ))}
           {data.chat.length === 0 ? (
             <tr>
-              <td colSpan={6} className="muted">
+              <td colSpan={5} className="muted">
                 No chat-model data for window.
               </td>
             </tr>

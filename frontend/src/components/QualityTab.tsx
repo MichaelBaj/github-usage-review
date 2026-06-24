@@ -56,10 +56,10 @@ export function QualityTab(): JSX.Element {
           <Kpi
             label="Chat interactions"
             value={cvi.chat_total.toLocaleString()}
-            sub={`${cvi.chat_insertions} insertions / ${cvi.chat_copies} copies`}
+            sub={`${cvi.chat_insertions} insertions`}
             tooltip={
               "Sum of total_chats across all chat editors / models in the window. " +
-              "Insertions = code inserted from chat into the editor; copies = code copied from chat."
+              "Insertions = code inserted from chat into the editor."
             }
           />
           <Kpi

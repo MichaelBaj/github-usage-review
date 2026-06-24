@@ -166,7 +166,6 @@ export interface ModelRow {
   lines_accepted: number;
   chats: number;
   chat_insertions: number;
-  chat_copies: number;
   engaged_users: number;
   acceptance_rate: number;
   ai_credits: number;
@@ -192,7 +191,6 @@ export interface ChatVsInline {
   code_acceptance_rate: number;
   chat_total: number;
   chat_insertions: number;
-  chat_copies: number;
   chat_interaction_share: number;
 }
 
