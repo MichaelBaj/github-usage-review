@@ -25,9 +25,10 @@ export function App(): JSX.Element {
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [dataVersion, setDataVersion] = useState(0);
-  const [lastLoad, setLastLoad] = useState<{ at: string | null; source: string | null }>({
+  const [lastLoad, setLastLoad] = useState<{ at: string | null; source: string | null; historyDays: number | null }>({
     at: null,
     source: null,
+    historyDays: null,
   });
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [dbImportResult, setDbImportResult] = useState<DbImportResult | null>(null);
@@ -42,15 +43,13 @@ export function App(): JSX.Element {
   }, []);
 
   useEffect(() => {
-    api
-      .kpis({ days: 1 })
-      .then((k) =>
-        setLastLoad({
-          at: k.last_data_load_at ?? k.last_snapshot_at,
-          source: k.last_data_load_source ?? (k.last_snapshot_at ? "api" : null),
-        }),
-      )
-      .catch(() => undefined);
+    Promise.all([api.kpis({ days: 1 }), api.projections()]).then(([k, p]) =>
+      setLastLoad({
+        at: k.last_data_load_at ?? k.last_snapshot_at,
+        source: k.last_data_load_source ?? (k.last_snapshot_at ? "api" : null),
+        historyDays: p.available ? (p.history_days ?? null) : null,
+      }),
+    ).catch(() => undefined);
   }, [dataVersion]);
 
   function go(next: Tab): void {
@@ -137,6 +136,9 @@ export function App(): JSX.Element {
         <div>
           <h1>Copilot Usage Review</h1>
           <div className="meta">Last data load: {lastLoadLabel}</div>
+          {lastLoad.historyDays != null ? (
+            <div className="meta">History collected: {lastLoad.historyDays} days</div>
+          ) : null}
         </div>
         <div className="header-actions">
           <button onClick={refresh} disabled={refreshing || importing}>

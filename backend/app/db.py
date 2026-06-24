@@ -371,6 +371,13 @@ def replace_editor_rows(date: str, rows: Iterable[dict[str, Any]]) -> None:
         )
 
 
+def get_seat_logins() -> set[str]:
+    """Return the set of all logins currently in the seats table."""
+    with connect() as conn:
+        rows = conn.execute("SELECT login FROM seats").fetchall()
+    return {r[0] for r in rows if r[0]}
+
+
 def replace_seats(seats: list[dict[str, Any]]) -> None:
     """Replace the entire seats table with ``seats``."""
     snapshot_at = _utcnow_iso()

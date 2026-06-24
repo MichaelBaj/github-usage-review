@@ -432,3 +432,56 @@ def test_export_row_invalid_date_reports_validation_error() -> None:
     # Act + Assert — all rows invalid → ImportValidationError with remediation prompt
     with pytest.raises(ImportValidationError, match="Validation Errors"):
         import_usage_file("export.ndjson", content)
+
+def test_import_export_filters_active_users_to_org_seats() -> None:
+    """Enterprise-wide exports count only users present in the seats table."""
+    # Arrange
+    db.init_db()
+    # Seed seats — only alice is in the org
+    db.replace_seats([
+        {
+            "login": "alice",
+            "team": "core",
+            "assigning_team": "core",
+            "created_at": "2026-05-01T00:00:00Z",
+            "updated_at": "2026-06-01T00:00:00Z",
+            "last_activity_at": "2026-06-02T00:00:00Z",
+            "last_activity_editor": "vscode",
+            "pending_cancellation_date": None,
+            "plan_type": "business",
+            "raw_json": "{}",
+        }
+    ])
+    # Import with 3 users — only alice should count as active/engaged
+    rows = [
+        _export_row("alice"),
+        _export_row("bob"),
+        _export_row("charlie"),
+    ]
+    content = json.dumps(rows).encode()
+
+    # Act
+    result = import_usage_file("export.json", content)
+
+    # Assert — all 3 rows imported but active/engaged filtered to 1
+    assert result["rows_imported"] == 3
+    assert any("filtered" in w for w in result["warnings"])
+    trend = analytics.trends(start="2026-06-02", end="2026-06-02")
+    assert trend[0]["active_users"] == 1
+    assert trend[0]["engaged_users"] == 1
+
+
+def test_import_export_no_seats_skips_filtering() -> None:
+    """When seats table is empty, all users count (no filtering)."""
+    # Arrange
+    db.init_db()
+    rows = [_export_row("alice"), _export_row("bob")]
+    content = json.dumps(rows).encode()
+
+    # Act
+    result = import_usage_file("export.json", content)
+
+    # Assert — no filtering applied
+    assert not any("filtered" in w for w in result.get("warnings", []))
+    trend = analytics.trends(start="2026-06-02", end="2026-06-02")
+    assert trend[0]["active_users"] == 2

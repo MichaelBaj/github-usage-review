@@ -5,7 +5,6 @@ import {
   type CostWindow,
   type Kpis,
   type AiCreditsSummary,
-  type Projections,
   type StaleSeat,
   type TeamRow,
 } from "../api";
@@ -13,7 +12,6 @@ import { KpiCards } from "./KpiCards";
 import { TeamLeaderboard } from "./TeamLeaderboard";
 import { StaleSeats } from "./StaleSeats";
 import { BreakdownCharts } from "./BreakdownCharts";
-import { ProjectionsView } from "./Projections";
 import {
   defaultWindow,
   DateRangeSelector,
@@ -29,7 +27,6 @@ interface State {
   teams: TeamRow[];
   stale: StaleSeat[];
   breakdowns: Breakdowns | null;
-  projections: Projections | null;
   cost: CostWindow | null;
   premium: AiCreditsSummary | null;
 }
@@ -41,7 +38,6 @@ const initial: State = {
   teams: [],
   stale: [],
   breakdowns: null,
-  projections: null,
   cost: null,
   premium: null,
 };
@@ -54,16 +50,15 @@ export function SummaryTab(): JSX.Element {
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
       const params = toWindowParams(win);
-      const [kpis, teams, stale, breakdowns, projections, cost, premium] = await Promise.all([
+      const [kpis, teams, stale, breakdowns, cost, premium] = await Promise.all([
         api.kpis(params),
         api.teams(params),
         api.staleSeats(),
         api.breakdowns(params),
-        api.projections(),
         api.cost(params),
         api.aiCredits(params),
       ]);
-      setState({ loading: false, error: null, kpis, teams, stale, breakdowns, projections, cost, premium });
+      setState({ loading: false, error: null, kpis, teams, stale, breakdowns, cost, premium });
     } catch (e) {
       setState((s) => ({ ...s, loading: false, error: (e as Error).message }));
     }
@@ -157,10 +152,7 @@ export function SummaryTab(): JSX.Element {
             </div>
           </div>
 
-          <div className="panel">
-            <h2>Projections & Right-Sizing</h2>
-            {state.projections ? <ProjectionsView data={state.projections} /> : null}
-          </div>
+
         </>
       )}
     </div>

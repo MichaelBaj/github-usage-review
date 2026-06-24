@@ -74,7 +74,8 @@ export function TeamsTab(): JSX.Element {
       <DateRangeSelector value={win} onChange={setWin} />
       {error ? <div className="error">{error}</div> : null}
       <div className="split">
-        <div className="panel" style={{ minWidth: 320 }}>
+        <div style={{ minWidth: 320, display: "flex", flexDirection: "column", gap: 16 }}>
+        <div className="panel">
           <h2>Teams</h2>
           <div className="muted" style={{ marginBottom: 8 }}>
             Derived from per-user data (seat activity + billing) rolled up by team membership.
@@ -114,6 +115,13 @@ export function TeamsTab(): JSX.Element {
               ) : null}
             </tbody>
           </table>
+        </div>
+          {detail ? (
+            <div className="panel">
+              <h2>PR Activity — {detail.team}</h2>
+              <PrCorrelationTable c={detail.pr_correlation} />
+            </div>
+          ) : null}
         </div>
         <div style={{ flex: 1 }}>{detail ? <TeamDetailView detail={detail} /> : <div className="loading">Loading…</div>}</div>
       </div>
@@ -239,30 +247,8 @@ function TeamDetailView({ detail }: { detail: TeamDetail }): JSX.Element {
       </div>
 
       <div className="panel">
-        <h2>PR Activity</h2>
-        <PrCorrelationTable c={detail.pr_correlation} />
-      </div>
-
-      <div className="panel">
         <h2>AI Credit Usage (Billing-Derived)</h2>
         <AiCreditsTeamBlock data={detail.ai_credits} />
-      </div>
-
-      <div className="panel">
-        <h2>Members ({detail.members.length})</h2>
-        <div className="member-list">
-          {detail.members.length
-            ? detail.members.map((m) => (
-                <a
-                  key={m}
-                  className="chip"
-                  href={`#users?user=${encodeURIComponent(m)}`}
-                >
-                  {m}
-                </a>
-              ))
-            : <span className="muted">No team members synced. Check that the GitHub PAT has read:org.</span>}
-        </div>
       </div>
     </>
   );
@@ -507,7 +493,7 @@ export function AiCreditsTeamBlock({
           ) : (
             data.top_users.map((u) => (
               <tr key={u.login}>
-                <td>{u.login}</td>
+                <td><a href={`#users?user=${encodeURIComponent(u.login)}`}>{u.login}</a></td>
                 <td>{fmtNum(u.ai_credits)}</td>
                 <td>{fmtMoney(u.net_amount_usd)}</td>
               </tr>
