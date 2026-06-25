@@ -22,11 +22,11 @@ leaderboards, and 90-day projections.
 
 ```bash
 cp .env.example .env
-# Edit .env and set GITHUB_TOKEN (+ adjust GITHUB_ORG / SEAT_COST_USD as needed)
+# Edit .env and set GITHUB_TOKEN (+ adjust GITHUB_ORG / SEAT_COST_USD / FRONTEND_PORT as needed)
 docker compose up --build
 ```
 
-Open <http://localhost:8080>. The first snapshot runs in the background
+Open <http://localhost:8080> (or your `FRONTEND_PORT` value from `.env`). The first snapshot runs in the background
 shortly after the backend starts; click **Refresh snapshot** to force one.
 Use **Import file** to load a local GitHub Copilot usage export or
 billing CSV report instead of calling the Copilot Metrics API.
@@ -102,6 +102,8 @@ All settings come from environment variables (or a local `.env`).
 | `STALE_SEAT_DAYS` | `30` | Inactivity threshold for "stale" seats |
 | `SNAPSHOT_TIME_UTC` | `02:00` | Daily snapshot cron time (`HH:MM`, UTC) |
 | `DB_PATH` | `/data/copilot.db` | SQLite file location |
+| `BACKEND_PORT` | `8000` | Host port mapped to backend container port `8000` in docker-compose |
+| `FRONTEND_PORT` | `8080` | Host port mapped to frontend container port `80` in docker-compose |
 | `CORS_ALLOW_ORIGINS` | `["http://localhost:5173"]` | JSON list of allowed frontend origins |
 | `PR_INGEST_ENABLED` | `true` | Ingest PR activity for the Users / Quality tabs |
 | `PR_LOOKBACK_DAYS` | `120` | How far back to walk repos for PRs |
