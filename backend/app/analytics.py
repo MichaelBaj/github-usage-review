@@ -1596,11 +1596,15 @@ def _billing_dedup_sql(
 ) -> str:
     """Return a SQL fragment that prevents double-counting billing rows.
 
-    When both model-attributed rows (from CSV AI-usage import) and
-    non-model rows (from CSV usage import or API snapshots) exist for the
-    same window, the non-model rows are duplicate aggregates. This helper
-    returns ``"AND model != ''"`` when model-attributed data is available,
-    or ``""`` when only non-model data exists.
+    When both the AI-usage CSV (per-user/per-model detail) and the general
+    usage CSV (monthly aggregates) have been imported, their rows overlap.
+    This helper returns a conditional filter:
+
+    * **AI-credit SKUs** — keep only model-attributed rows (``model != ''``).
+    * **Non-AI-credit SKUs** (licenses) — keep only login-attributed rows
+      (``login != ''``), excluding the general-CSV monthly aggregate.
+
+    Returns ``""`` when only non-detailed data exists (general CSV only).
     """
     has = conn.execute(
         "SELECT 1 FROM billing_usage WHERE date BETWEEN ? AND ? "
@@ -1610,7 +1614,12 @@ def _billing_dedup_sql(
         "AND model != '' LIMIT 1",
         (start_iso, end_iso),
     ).fetchone()
-    return "AND model != ''" if has else ""
+    if has:
+        return (
+            f"AND (({_COPILOT_BILLABLE_SKU_SQL} AND model != '') "
+            f"OR (NOT ({_COPILOT_BILLABLE_SKU_SQL}) AND login != ''))"
+        )
+    return ""
 
 
 def _is_copilot_billable_sku(sku: str | None) -> bool:

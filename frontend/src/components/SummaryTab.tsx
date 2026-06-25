@@ -255,6 +255,67 @@ export function SummaryTab(): JSX.Element {
                   }
                 />
               </div>
+
+              {state.premium?.available ? (() => {
+                const aiGross = state.premium!.skus.reduce((s, k) => s + k.gross_amount_usd, 0);
+                const aiNet = state.premium!.total_ai_credit_cost_usd;
+                const included = aiGross - aiNet;
+                const licenses = state.cost!.window_cost_usd - aiNet;
+                return (
+                  <div style={{ marginTop: 16 }}>
+                    <h3 className="subhead">Cost Breakdown</h3>
+                    <p className="muted" style={{ marginBottom: 8 }}>
+                      GitHub's billing page labels "Total gross spend on Copilot" as licenses + overage only
+                      — not the true list-price gross. The breakdown below reconciles these figures.
+                    </p>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Line Item</th>
+                          <th className="num-col">Amount</th>
+                          <th>Notes</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td>AI credits consumed</td>
+                          <td className="num-col">{fmtNum(state.premium!.total_ai_credits)}</td>
+                          <td className="muted">Total credits at list price</td>
+                        </tr>
+                        <tr>
+                          <td>AI credits gross (list price)</td>
+                          <td className="num-col">{fmtMoney(aiGross)}</td>
+                          <td className="muted">All credits × $0.01</td>
+                        </tr>
+                        <tr style={{ color: "var(--color-success, #3fb950)" }}>
+                          <td>Included usage discount</td>
+                          <td className="num-col">−{fmtMoney(included)}</td>
+                          <td className="muted">Credits covered by plan allowance</td>
+                        </tr>
+                        <tr>
+                          <td>AI credits overage (net)</td>
+                          <td className="num-col">{fmtMoney(aiNet)}</td>
+                          <td className="muted">
+                            {aiNet > 0
+                              ? `~${fmtNum(Math.round(aiNet / 0.01))} credits beyond included`
+                              : "All usage within included allowance"}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td>Enterprise licenses</td>
+                          <td className="num-col">{fmtMoney(licenses)}</td>
+                          <td className="muted">Per-seat license fees (no discount)</td>
+                        </tr>
+                        <tr style={{ fontWeight: 600, borderTop: "2px solid var(--color-border, #444)" }}>
+                          <td>Window cost (total billable)</td>
+                          <td className="num-col">{fmtMoney(state.cost!.window_cost_usd)}</td>
+                          <td className="muted">Licenses + AI overage = GitHub "gross spend"</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })() : null}
             </div>
           ) : null}
 
