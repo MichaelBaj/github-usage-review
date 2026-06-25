@@ -671,6 +671,32 @@ def model_breakdown(
         else:
             code.append(entry)
 
+    # Add billing-only models (e.g. "Code Review model") that have no
+    # metrics counterpart.  Skip "auto:" variants (duplicates of explicit
+    # model selections) and "unspecified"/"unknown".
+    metrics_models = {e["model"] for e in code + chat}
+    for model_name, credits in credits_by_model.items():
+        if model_name in metrics_models:
+            continue
+        if model_name in ("unspecified", "unknown"):
+            continue
+        if model_name.startswith("auto:"):
+            continue
+        chat.append({
+            "editor": "",
+            "model": model_name,
+            "suggestions": 0,
+            "acceptances": 0,
+            "lines_suggested": 0,
+            "lines_accepted": 0,
+            "chats": 0,
+            "chat_insertions": 0,
+            "chat_copies": 0,
+            "engaged_users": 0,
+            "acceptance_rate": 0.0,
+            "ai_credits": credits,
+        })
+
     code.sort(key=lambda x: x["acceptances"], reverse=True)
     chat.sort(key=lambda x: x["chats"], reverse=True)
 
