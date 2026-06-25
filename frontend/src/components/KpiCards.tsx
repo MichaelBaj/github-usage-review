@@ -42,24 +42,6 @@ export function KpiCards({ kpis }: Props): JSX.Element {
         "= sum(total_code_acceptances) / sum(total_code_suggestions) across all editors, " +
         "models, and languages from the GitHub Copilot Metrics API.",
     },
-    {
-      label: "Hours Saved (30d, est.)",
-      value: kpis.hours_saved_30d.toLocaleString(),
-      sub: `${kpis.avg_dau_7d.toLocaleString()} avg DAU (7d)`,
-      tooltip:
-        "Estimate: acceptances_30d × MINUTES_SAVED_PER_ACCEPTANCE / 60. " +
-        "DAU = Daily Active Users (distinct users with any Copilot IDE telemetry that day, " +
-        "from total_active_users); avg_dau_7d is the mean of the last 7 daily values.",
-    },
-    {
-      label: "Window Cost (consumption)",
-      value: money(kpis.window_cost_usd),
-      sub: `${money(kpis.monthly_cost_usd)}/mo run-rate`,
-      tooltip:
-        "Actual Copilot consumption charges for the window — sum of billing " +
-        "net_amount_usd across Copilot SKUs (GitHub bills Copilot per usage, " +
-        "not a fixed per-seat price). Sub-value extrapolates to a 30-day run-rate.",
-    },
   ];
   return (
     <div className="kpi-grid">

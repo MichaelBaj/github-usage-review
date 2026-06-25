@@ -5,6 +5,8 @@ import { fmtMoney, fmtNum, Kpi } from "./TeamsTab";
 import {
   BarChart,
   Bar,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -291,6 +293,20 @@ function UserDetailView({ detail }: { detail: UserDetail }): JSX.Element {
             </table>
           </div>
         </div>
+        {detail.ai_credits.daily_ai_credits.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <h3 className="subhead">AI Credits Over Time</h3>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={detail.ai_credits.daily_ai_credits}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                <YAxis />
+                <Tooltip />
+                <Line type="monotone" dataKey="ai_credits" stroke="#6366f1" dot={false} name="AI Credits" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
       </div>
 
       <ModelUsagePanel detail={detail} />

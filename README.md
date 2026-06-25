@@ -345,6 +345,39 @@ Coverage focus: pure functions (`_flatten_languages`, `_flatten_editors`,
 `_normalize_seat`, `_linreg`), the local file importer, and the
 analytics layer backed by a temp SQLite fixture.
 
+## Data Reset
+
+If you distrust accumulated data after schema changes or need a clean slate
+for reimporting, use the reset script:
+
+```bash
+cd backend && .venv/bin/python -m scripts.reset_data
+```
+
+The script resolves the DB path in this order:
+
+1. `--db-path` (if provided)
+2. `DB_PATH` / app settings
+3. Local fallback paths (`backend/data/copilot.db`, then `data/copilot.db`)
+
+Examples:
+
+```bash
+# Explicit path
+cd backend && .venv/bin/python -m scripts.reset_data --db-path data/copilot.db
+
+# Or via env
+cd backend && DB_PATH=data/copilot.db .venv/bin/python -m scripts.reset_data
+```
+
+This deletes all data rows while preserving the schema, so the app can
+re-populate via:
+
+- Daily snapshot job (normal operation via GitHub API)
+- **Import file** (CSV, JSON, NDJSON)
+- **Refresh snapshot** (force immediate API snapshot)
+- `scripts.seed_test_data` (synthetic test data for preview)
+
 ## Fake-Data Mode (UI Preview Without a PAT)
 
 If you don't yet have a GitHub PAT with Copilot enterprise / billing
@@ -396,4 +429,8 @@ Internal — Juniper Networks.
 
 ---
 
-*Last reviewed: 2026-06-04*
+**Version:** 2026-06-24
+
+History collected:
+- 2026-06-24: Data reset script, version tracking added; seat filtering, PR activity reorganization, AI-credits rendering fixes
+- 2026-06-04: Last comprehensive review

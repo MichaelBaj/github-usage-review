@@ -6,7 +6,7 @@ import {
   toWindowParams,
   type WindowState,
 } from "./DateRangeSelector";
-import { fmtNum, fmtPct, Kpi, ModelTable, PrCorrelationTable, fmtMoney } from "./TeamsTab";
+import { fmtNum, fmtPct, Kpi, ModelSummaryTable, CodeEditorTable, PrCorrelationTable, fmtMoney } from "./TeamsTab";
 
 export function QualityTab(): JSX.Element {
   const [win, setWin] = useState<WindowState>(defaultWindow(30));
@@ -56,10 +56,10 @@ export function QualityTab(): JSX.Element {
           <Kpi
             label="Chat interactions"
             value={cvi.chat_total.toLocaleString()}
-            sub={`${cvi.chat_insertions} insertions / ${cvi.chat_copies} copies`}
+            sub={`${cvi.chat_insertions} insertions`}
             tooltip={
               "Sum of total_chats across all chat editors / models in the window. " +
-              "Insertions = code inserted from chat into the editor; copies = code copied from chat."
+              "Insertions = code inserted from chat into the editor."
             }
           />
           <Kpi
@@ -75,7 +75,8 @@ export function QualityTab(): JSX.Element {
 
       <div className="panel">
         <h2>Model Usage (Org)</h2>
-        <ModelTable data={data.model_breakdown} />
+        <ModelSummaryTable data={data.model_breakdown} />
+        <CodeEditorTable rows={data.model_breakdown.code_editors} />
       </div>
 
       <div className="panel">
@@ -215,7 +216,7 @@ export function QualityTab(): JSX.Element {
                 }
               />
             </div>
-            <h3 className="subhead">By SKU</h3>
+            <h3 className="subhead">By Billable SKU</h3>
             <table>
               <thead>
                 <tr>

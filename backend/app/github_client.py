@@ -23,6 +23,10 @@ ACCEPT = "application/vnd.github+json"
 API_VERSION = "2022-11-28"
 
 
+class SnapshotPreflightError(RuntimeError):
+    """Raised when snapshot prerequisites are not met before ingestion."""
+
+
 class GitHubClient:
     """Authenticated async client for the GitHub REST API."""
 
@@ -244,3 +248,81 @@ class GitHubClient:
             params=params or None,
         )
         return response.json()
+
+    async def assert_snapshot_permissions(self, include_pr_checks: bool = False) -> None:
+        """Fail fast when token/org permissions are insufficient for snapshot refresh.
+
+        This preflight runs cheap probe calls first so we avoid running the full
+        snapshot and failing deep into high-volume API loops.
+        """
+
+        failures: list[str] = []
+
+        def _action_for(status: int) -> str:
+            if status == 401:
+                return (
+                    "Action: set GITHUB_TOKEN to a valid, non-expired PAT and restart backend."
+                )
+            if status == 403:
+                return (
+                    "Action: use a token authorized for org admin-level Copilot access, "
+                    "grant read:org, and approve token for SSO if org enforces SAML."
+                )
+            if status == 404:
+                return (
+                    "Action: verify GITHUB_ORG / GITHUB_ENTERPRISE values and confirm "
+                    "org has Copilot Business or Enterprise enabled."
+                )
+            return "Action: verify token and organization settings, then retry."
+
+        async def _probe(label: str, path: str, params: dict[str, Any] | None = None) -> None:
+            try:
+                await self._get(path, params=params)
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                failures.append(
+                    f"- {label} failed ({status}) at GET {path}. {_action_for(status)}"
+                )
+
+        await _probe("Token auth check", "/user")
+        await _probe(
+            "Copilot seats access",
+            f"/orgs/{self.org}/copilot/billing/seats",
+            params={"per_page": 1, "page": 1},
+        )
+        await _probe(
+            "Organization teams access",
+            f"/orgs/{self.org}/teams",
+            params={"per_page": 1, "page": 1},
+        )
+
+        # Metrics can legitimately 404 when org telemetry is below privacy
+        # thresholds. We only fail for explicit auth/permission errors.
+        try:
+            await self._get(f"/orgs/{self.org}/copilot/metrics")
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status == 404 and self.enterprise:
+                await _probe(
+                    "Enterprise Copilot metrics access",
+                    f"/enterprises/{self.enterprise}/copilot/metrics",
+                )
+            elif status in (401, 403):
+                failures.append(
+                    "- Copilot metrics access failed "
+                    f"({status}) at GET /orgs/{self.org}/copilot/metrics. "
+                    f"{_action_for(status)}"
+                )
+
+        if include_pr_checks:
+            await _probe(
+                "Organization repository listing access",
+                f"/orgs/{self.org}/repos",
+                params={"type": "all", "sort": "pushed", "per_page": 1, "page": 1},
+            )
+
+        if failures:
+            raise SnapshotPreflightError(
+                "Snapshot preflight failed due to GitHub token/org permission issues:\n"
+                + "\n".join(failures)
+            )

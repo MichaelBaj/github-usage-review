@@ -111,6 +111,54 @@ def test_ai_credits_summary_lists_top_users(billing_db: None) -> None:
     assert "bob" in top_logins
 
 
+def test_ai_credits_summary_sku_table_uses_billable_rows_and_normalizes_labels() -> None:
+    """By-SKU rows must match billable totals and collapse naming variants."""
+    # Arrange
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-06-02",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 100,
+                "gross_amount_usd": 4.00,
+                "net_amount_usd": 4.00,
+            },
+            {
+                "date": "2026-06-02",
+                "login": "bob",
+                "product": "Copilot",
+                "sku": "Copilot AI Credits",
+                "quantity": 50,
+                "gross_amount_usd": 2.00,
+                "net_amount_usd": 2.00,
+            },
+            {
+                "date": "2026-06-02",
+                "login": "carol",
+                "product": "Copilot Enterprise",
+                "sku": "copilot_enterprise",
+                "quantity": 900,
+                "gross_amount_usd": 9.00,
+                "net_amount_usd": 9.00,
+            },
+        ]
+    )
+
+    # Act
+    out = analytics.ai_credits_summary(start="2026-06-02", end="2026-06-02")
+
+    # Assert
+    assert out["total_ai_credits"] == pytest.approx(150.0)
+    assert len(out["skus"]) == 1
+    row = out["skus"][0]
+    assert row["sku"] == "copilot_ai_credit"
+    assert row["product"] == "copilot"
+    assert row["quantity"] == pytest.approx(150.0)
+
+
 def test_ai_credits_for_user_filters_by_login(billing_db: None) -> None:
     """Per-user view filters and case-folds the login."""
     # Act
@@ -145,6 +193,64 @@ def test_ai_credits_summary_marks_unavailable_when_db_empty() -> None:
     # Assert
     assert out["available"] is False
     assert out["total_ai_credits"] == 0.0
+
+
+def test_ai_credits_summary_groups_top_users_per_model() -> None:
+    """Per-model rollup returns top 5 users with percentage share."""
+    # Arrange
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-06-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 60,
+                "net_amount_usd": 2.40,
+                "model": "Claude Opus 4.6",
+            },
+            {
+                "date": "2026-06-01",
+                "login": "bob",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 40,
+                "net_amount_usd": 1.60,
+                "model": "Claude Opus 4.6",
+            },
+            {
+                "date": "2026-06-01",
+                "login": "bob",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 20,
+                "net_amount_usd": 0.80,
+                "model": "GPT-5.4",
+            },
+            {
+                "date": "2026-06-01",
+                "login": "charlie",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 5,
+                "net_amount_usd": 0.20,
+                "model": "GPT-5.4",
+            },
+        ]
+    )
+
+    # Act
+    out = analytics.ai_credits_summary(start="2026-06-01", end="2026-06-01")
+
+    # Assert
+    by_model = {row["model"]: row for row in out["top_users_per_model"]}
+    assert by_model["Claude Opus 4.6"]["total_ai_credits"] == pytest.approx(100.0)
+    assert by_model["Claude Opus 4.6"]["top_users"][0]["login"] == "alice"
+    assert by_model["Claude Opus 4.6"]["top_users"][0]["ai_credits"] == pytest.approx(60.0)
+    assert by_model["Claude Opus 4.6"]["top_users"][0]["percentage"] == pytest.approx(60.0)
+    assert by_model["GPT-5.4"]["total_ai_credits"] == pytest.approx(25.0)
+    assert by_model["GPT-5.4"]["top_users"][0]["login"] == "bob"
 
 
 def test_model_from_sku_parses_model_suffix() -> None:
@@ -214,3 +320,131 @@ def test_ai_credits_for_user_groups_by_model() -> None:
     assert by_model["GPT-4.1"]["share"] == pytest.approx(0.2)
     # Sorted descending by AI-credit count
     assert out["by_model"][0]["model"] == "Claude 3.5 Sonnet"
+
+
+def test_ai_credits_summary_returns_balanced_users() -> None:
+    """Balanced users require >=20% high-tier and >=20% low-tier usage."""
+    # Arrange
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-06-01",
+                "login": "balanced",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 60,
+                "net_amount_usd": 2.40,
+                "model": "Claude Opus 4.6",
+            },
+            {
+                "date": "2026-06-01",
+                "login": "balanced",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 40,
+                "net_amount_usd": 1.60,
+                "model": "Claude Sonnet 4.6",
+            },
+            {
+                "date": "2026-06-01",
+                "login": "high_only",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 100,
+                "net_amount_usd": 4.00,
+                "model": "GPT-5.4",
+            },
+        ]
+    )
+
+    # Act
+    out = analytics.ai_credits_summary(start="2026-06-01", end="2026-06-01")
+
+    # Assert
+    assert out["balanced_user_threshold_pct"] == pytest.approx(20.0)
+    assert out["balanced_users"][0]["login"] == "balanced"
+    assert out["balanced_users"][0]["high_pct"] == pytest.approx(60.0)
+    assert out["balanced_users"][0]["low_pct"] == pytest.approx(40.0)
+    assert all(user["login"] != "high_only" for user in out["balanced_users"])
+
+
+def test_model_tier_auto_gpt54_counts_as_high() -> None:
+    """High-tier model matches should override the generic Auto:* low-tier bucket."""
+    # Act + Assert
+    assert analytics._model_tier("Auto: GPT-5.4") == "high"
+    assert analytics._model_tier("Auto: GPT-5.3-Codex") == "low"
+
+
+def test_ai_credits_summary_deduplicates_overlapping_sources() -> None:
+    """When model-attributed rows exist, non-model duplicates must be excluded.
+
+    Billing data can be imported from multiple CSV sources that overlap:
+    - csv_ai_usage_report: per-user, per-model (has model attribution)
+    - csv_usage_report: per-user aggregate (model='')
+    - API snapshot: org-level aggregate (model='', login='')
+
+    Only model-attributed rows should be counted when they are available.
+    """
+    # Arrange
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            # Source 1: model-attributed rows (csv_ai_usage_report)
+            {
+                "date": "2026-06-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 60,
+                "net_amount_usd": 2.40,
+                "model": "Claude Opus 4.6",
+                "source": "csv_ai_usage_report",
+            },
+            {
+                "date": "2026-06-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 40,
+                "net_amount_usd": 1.60,
+                "model": "GPT-5.4",
+                "source": "csv_ai_usage_report",
+            },
+            # Source 2: per-user aggregate WITHOUT model (csv_usage_report)
+            # Same total as alice's model rows — this is a duplicate aggregate.
+            {
+                "date": "2026-06-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 100,
+                "net_amount_usd": 4.00,
+                "model": "",
+                "source": "csv_usage_report",
+            },
+            # Source 3: org-level aggregate (API snapshot)
+            {
+                "date": "2026-06-01",
+                "login": "",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 100,
+                "net_amount_usd": 4.00,
+                "model": "",
+                "source": "",
+            },
+        ]
+    )
+
+    # Act
+    out = analytics.ai_credits_summary(start="2026-06-01", end="2026-06-01")
+
+    # Assert — should be 100 (60+40), NOT 300 (triple-counted)
+    assert out["total_ai_credits"] == pytest.approx(100.0)
+    assert out["total_ai_credit_cost_usd"] == pytest.approx(4.00)
+    assert len(out["skus"]) == 1
+    assert out["skus"][0]["quantity"] == pytest.approx(100.0)
+    # Per-user should also be deduped
+    assert len(out["top_users"]) == 1
+    assert out["top_users"][0]["ai_credits"] == pytest.approx(100.0)

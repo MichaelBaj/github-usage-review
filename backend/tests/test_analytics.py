@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app import analytics, db
+from app.config import BILLING_MIN_DATE
 from app.snapshot import _flatten_editors, _flatten_languages, _normalize_seat
 
 
@@ -144,8 +145,13 @@ def test_kpis_compute_cost_and_hours_saved(populated_db: None) -> None:
     result = analytics.kpis()
 
     # Assert
-    assert result["window_cost_usd"] == pytest.approx(60.0, rel=0.01)  # 30d × $2/day
-    assert result["monthly_cost_usd"] == pytest.approx(60.0, rel=0.01)  # 30-day run-rate
+    today = datetime.now(UTC).date()
+    cutoff = datetime.fromisoformat(BILLING_MIN_DATE).date()
+    start = today - timedelta(days=29)
+    billed_days = max(0, (today - max(start, cutoff)).days + 1)
+    expected = float(billed_days * 2)
+    assert result["window_cost_usd"] == pytest.approx(expected, rel=0.01)
+    assert result["monthly_cost_usd"] == pytest.approx(expected, rel=0.01)
     assert result["hours_saved_30d"] > 0
     assert "cost_per_active_user_usd" not in result
     assert "wasted_spend_usd" not in result

@@ -166,7 +166,6 @@ export interface ModelRow {
   lines_accepted: number;
   chats: number;
   chat_insertions: number;
-  chat_copies: number;
   engaged_users: number;
   acceptance_rate: number;
   ai_credits: number;
@@ -179,6 +178,16 @@ export interface ModelBreakdown {
   team: string | null;
   code: ModelRow[];
   chat: ModelRow[];
+  code_editors: CodeEditorRow[];
+}
+
+export interface CodeEditorRow {
+  editor: string;
+  suggestions: number;
+  acceptances: number;
+  acceptance_rate: number;
+  lines_suggested: number;
+  lines_accepted: number;
 }
 
 export interface ChatVsInline {
@@ -192,7 +201,6 @@ export interface ChatVsInline {
   code_acceptance_rate: number;
   chat_total: number;
   chat_insertions: number;
-  chat_copies: number;
   chat_interaction_share: number;
 }
 
@@ -380,6 +388,33 @@ export interface AiCreditUser {
   net_amount_usd: number;
 }
 
+export interface AiCreditModelUser {
+  login: string;
+  ai_credits: number;
+  percentage: number;
+}
+
+export interface AiCreditTopUsersPerModel {
+  model: string;
+  total_ai_credits: number;
+  top_users: AiCreditModelUser[];
+}
+
+export interface AiCreditBalancedModelRow {
+  model: string;
+  quantity: number;
+  pct: number;
+  tier: "high" | "low";
+}
+
+export interface AiCreditBalancedUser {
+  login: string;
+  total_ai_credits: number;
+  high_pct: number;
+  low_pct: number;
+  models: AiCreditBalancedModelRow[];
+}
+
 export interface AiCreditsSummary {
   window_start: string;
   window_end: string;
@@ -388,6 +423,11 @@ export interface AiCreditsSummary {
   total_ai_credit_cost_usd: number;
   skus: AiCreditSku[];
   top_users: AiCreditUser[];
+  top_users_per_model?: AiCreditTopUsersPerModel[];
+  balanced_user_threshold_pct?: number;
+  balanced_user_high_tiers?: string[];
+  balanced_user_low_tiers?: string[];
+  balanced_users?: AiCreditBalancedUser[];
   tokens_available: boolean;
   tokens_note: string;
 }
@@ -459,7 +499,16 @@ export const api = {
   projections: () => getJson<Projections>("/api/projections"),
   runSnapshot: async (): Promise<unknown> => {
     const r = await fetch("/api/snapshot/run", { method: "POST" });
-    if (!r.ok) throw new Error(`snapshot failed: ${r.status}`);
+    if (!r.ok) {
+      let detail = `${r.status} ${r.statusText}`;
+      try {
+        const payload = (await r.json()) as { detail?: string };
+        detail = payload.detail ?? detail;
+      } catch {
+        // Keep the HTTP status fallback.
+      }
+      throw new Error(`snapshot failed: ${detail}`);
+    }
     return r.json();
   },
   importFile: async (file: File): Promise<ImportResult> => {

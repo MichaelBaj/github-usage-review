@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type ModelBreakdown, type TeamDetail, type TeamRow } from "../api";
+import { api, type CodeEditorRow, type ModelBreakdown, type TeamDetail, type TeamRow } from "../api";
 import { defaultWindow, DateRangeSelector, toWindowParams, type WindowState } from "./DateRangeSelector";
 import {
   BarChart,
@@ -74,7 +74,8 @@ export function TeamsTab(): JSX.Element {
       <DateRangeSelector value={win} onChange={setWin} />
       {error ? <div className="error">{error}</div> : null}
       <div className="split">
-        <div className="panel" style={{ minWidth: 320 }}>
+        <div style={{ minWidth: 320, display: "flex", flexDirection: "column", gap: 16 }}>
+        <div className="panel">
           <h2>Teams</h2>
           <div className="muted" style={{ marginBottom: 8 }}>
             Derived from per-user data (seat activity + billing) rolled up by team membership.
@@ -114,6 +115,13 @@ export function TeamsTab(): JSX.Element {
               ) : null}
             </tbody>
           </table>
+        </div>
+          {detail ? (
+            <div className="panel">
+              <h2>PR Activity — {detail.team}</h2>
+              <PrCorrelationTable c={detail.pr_correlation} />
+            </div>
+          ) : null}
         </div>
         <div style={{ flex: 1 }}>{detail ? <TeamDetailView detail={detail} /> : <div className="loading">Loading…</div>}</div>
       </div>
@@ -239,31 +247,126 @@ function TeamDetailView({ detail }: { detail: TeamDetail }): JSX.Element {
       </div>
 
       <div className="panel">
-        <h2>PR Activity</h2>
-        <PrCorrelationTable c={detail.pr_correlation} />
-      </div>
-
-      <div className="panel">
         <h2>AI Credit Usage (Billing-Derived)</h2>
         <AiCreditsTeamBlock data={detail.ai_credits} />
       </div>
+    </>
+  );
+}
 
-      <div className="panel">
-        <h2>Members ({detail.members.length})</h2>
-        <div className="member-list">
-          {detail.members.length
-            ? detail.members.map((m) => (
-                <a
-                  key={m}
-                  className="chip"
-                  href={`#users?user=${encodeURIComponent(m)}`}
-                >
-                  {m}
-                </a>
-              ))
-            : <span className="muted">No team members synced. Check that the GitHub PAT has read:org.</span>}
-        </div>
-      </div>
+interface ModelSummaryRow {
+  model: string;
+  ai_credits: number;
+  pct_of_total: number;
+  chats: number;
+  engaged_users: number;
+}
+
+export function ModelSummaryTable({ data }: { data: ModelBreakdown }): JSX.Element {
+  const byModel = new Map<string, ModelSummaryRow>();
+  for (const r of [...data.chat]) {
+    const key = (r.model || "unknown").toLowerCase();
+    const existing = byModel.get(key);
+    if (existing) {
+      existing.ai_credits = Math.max(existing.ai_credits, r.ai_credits);
+      existing.chats += r.chats;
+      existing.engaged_users = 0;
+    } else {
+      byModel.set(key, {
+        model: r.model || "unknown",
+        ai_credits: r.ai_credits,
+        pct_of_total: 0,
+        chats: r.chats,
+        engaged_users: 0,
+      });
+    }
+  }
+  const rows = Array.from(byModel.values());
+  const grandTotal = rows.reduce((sum, r) => sum + r.ai_credits, 0);
+  for (const r of rows) {
+    r.pct_of_total = grandTotal > 0 ? r.ai_credits / grandTotal : 0;
+  }
+  rows.sort((a, b) => b.ai_credits - a.ai_credits);
+
+  if (rows.length === 0 || grandTotal === 0) {
+    return <p className="muted">No per-model AI credit data available for this window.</p>;
+  }
+
+  return (
+    <>
+      <h3 className="subhead">Per-Model Summary (all editors combined)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>AI Credits</th>
+            <th>% of Total</th>
+            <th>Chats</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.model}>
+              <td>{r.model}</td>
+              <td>{fmtNum(r.ai_credits)}</td>
+              <td>{fmtPct(r.pct_of_total)}</td>
+              <td>{fmtNum(r.chats)}</td>
+            </tr>
+          ))}
+          <tr style={{ fontWeight: "bold", borderTop: "2px solid var(--border)" }}>
+            <td>Total</td>
+            <td>{fmtNum(grandTotal)}</td>
+            <td>100%</td>
+            <td>{fmtNum(rows.reduce((s, r) => s + r.chats, 0))}</td>
+          </tr>
+        </tbody>
+      </table>
+    </>
+  );
+}
+
+export function CodeEditorTable({ rows }: { rows: CodeEditorRow[] }): JSX.Element {
+  if (!rows || rows.length === 0) {
+    return <p className="muted">No per-editor code completion data available for this window.</p>;
+  }
+  const sorted = [...rows].sort((a, b) => b.acceptances - a.acceptances);
+  const totalSug = sorted.reduce((s, r) => s + r.suggestions, 0);
+  const totalAcc = sorted.reduce((s, r) => s + r.acceptances, 0);
+  const totalLines = sorted.reduce((s, r) => s + r.lines_accepted, 0);
+  const totalRate = totalSug > 0 ? totalAcc / totalSug : 0;
+
+  return (
+    <>
+      <h3 className="subhead" style={{ marginTop: 16 }}>Code Completions by Editor</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Editor</th>
+            <th>Suggestions</th>
+            <th>Acceptances</th>
+            <th>Acc Rate</th>
+            <th>Lines Accepted</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r) => (
+            <tr key={r.editor}>
+              <td>{r.editor}</td>
+              <td>{fmtNum(r.suggestions)}</td>
+              <td>{fmtNum(r.acceptances)}</td>
+              <td>{fmtPct(r.acceptance_rate)}</td>
+              <td>{fmtNum(r.lines_accepted)}</td>
+            </tr>
+          ))}
+          <tr style={{ fontWeight: "bold", borderTop: "2px solid var(--border)" }}>
+            <td>Total</td>
+            <td>{fmtNum(totalSug)}</td>
+            <td>{fmtNum(totalAcc)}</td>
+            <td>{fmtPct(totalRate)}</td>
+            <td>{fmtNum(totalLines)}</td>
+          </tr>
+        </tbody>
+      </table>
     </>
   );
 }
@@ -271,7 +374,9 @@ function TeamDetailView({ detail }: { detail: TeamDetail }): JSX.Element {
 export function ModelTable({ data }: { data: ModelBreakdown }): JSX.Element {
   return (
     <>
-      <h3 className="subhead">Code Models</h3>
+      <h3 className="subhead" style={{ marginTop: 16 }}>
+        Code Models
+      </h3>
       <table>
         <thead>
           <tr>
@@ -315,7 +420,6 @@ export function ModelTable({ data }: { data: ModelBreakdown }): JSX.Element {
             <th>Model</th>
             <th>Chats</th>
             <th>Insertions</th>
-            <th>Copies</th>
             <th>AI Credits</th>
           </tr>
         </thead>
@@ -326,13 +430,12 @@ export function ModelTable({ data }: { data: ModelBreakdown }): JSX.Element {
               <td>{r.model}</td>
               <td>{r.chats.toLocaleString()}</td>
               <td>{r.chat_insertions.toLocaleString()}</td>
-              <td>{r.chat_copies.toLocaleString()}</td>
               <td>{r.ai_credits.toLocaleString()}</td>
             </tr>
           ))}
           {data.chat.length === 0 ? (
             <tr>
-              <td colSpan={6} className="muted">
+              <td colSpan={5} className="muted">
                 No chat-model data for window.
               </td>
             </tr>
@@ -507,7 +610,7 @@ export function AiCreditsTeamBlock({
           ) : (
             data.top_users.map((u) => (
               <tr key={u.login}>
-                <td>{u.login}</td>
+                <td><a href={`#users?user=${encodeURIComponent(u.login)}`}>{u.login}</a></td>
                 <td>{fmtNum(u.ai_credits)}</td>
                 <td>{fmtMoney(u.net_amount_usd)}</td>
               </tr>

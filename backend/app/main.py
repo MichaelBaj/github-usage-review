@@ -16,8 +16,10 @@ from fastapi.responses import Response
 
 from . import analytics, db
 from .config import settings
+from .config import VERSION
+from .github_client import SnapshotPreflightError
 from .importer import ImportValidationError, import_usage_file
-from .snapshot import run_snapshot
+from .snapshot import assert_snapshot_permissions, run_snapshot
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("copilot-usage")
@@ -82,6 +84,7 @@ def health() -> dict[str, Any]:
         "last_snapshot_at": db.get_meta("last_snapshot_at"),
         "last_data_load_at": db.get_meta("last_data_load_at"),
         "last_data_load_source": db.get_meta("last_data_load_source"),
+        "version": VERSION,
     }
 
 
@@ -297,6 +300,10 @@ async def trigger_snapshot() -> dict[str, Any]:
         )
     if not settings.github_token:
         raise HTTPException(status_code=400, detail="GITHUB_TOKEN is not configured")
+    try:
+        await assert_snapshot_permissions()
+    except SnapshotPreflightError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return await run_snapshot()
 
 

@@ -9,6 +9,8 @@ from __future__ import annotations
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Calendar-date versioning (YYYY-MM-DD)
+VERSION = "2026-06-24"
 # Billing data before this date is rejected during import.
 BILLING_MIN_DATE = "2026-06-01"
 

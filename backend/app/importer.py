@@ -448,6 +448,24 @@ def _import_export_rows(
             + (f"\n\n{prompt}" if prompt else "")
         )
 
+    # Filter active/engaged user counts to org seat holders only.
+    # Enterprise-wide exports include users from all child orgs; without
+    # filtering, active_users can far exceed the org's actual seat count.
+    seat_logins = db.get_seat_logins()
+    if seat_logins:
+        total_filtered = 0
+        for day in by_day.values():
+            before = len(day.active_users)
+            day.active_users &= seat_logins
+            day.engaged_users &= seat_logins
+            total_filtered += before - len(day.active_users)
+        if total_filtered:
+            _add_warning(
+                warnings,
+                f"filtered {total_filtered} user-day entries not in org seats "
+                f"({len(seat_logins)} known seats)",
+            )
+
     dates = sorted(by_day)
     overwritten = _existing_org_scopes(dates)
     for date in dates:
