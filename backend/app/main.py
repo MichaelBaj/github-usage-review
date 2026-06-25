@@ -16,6 +16,7 @@ from fastapi.responses import Response
 
 from . import analytics, db
 from .config import settings
+from .config import VERSION
 from .importer import ImportValidationError, import_usage_file
 from .snapshot import run_snapshot
 
@@ -82,6 +83,7 @@ def health() -> dict[str, Any]:
         "last_snapshot_at": db.get_meta("last_snapshot_at"),
         "last_data_load_at": db.get_meta("last_data_load_at"),
         "last_data_load_source": db.get_meta("last_data_load_source"),
+        "version": VERSION,
     }
 
 

@@ -254,10 +254,107 @@ function TeamDetailView({ detail }: { detail: TeamDetail }): JSX.Element {
   );
 }
 
+interface ModelSummaryRow {
+  model: string;
+  ai_credits: number;
+  pct_of_total: number;
+  suggestions: number;
+  acceptances: number;
+  acceptance_rate: number;
+  lines_accepted: number;
+  chats: number;
+  engaged_users: number;
+}
+
+export function ModelSummaryTable({ data }: { data: ModelBreakdown }): JSX.Element {
+  const byModel = new Map<string, ModelSummaryRow>();
+  for (const r of [...data.code, ...data.chat]) {
+    const key = (r.model || "unknown").toLowerCase();
+    const existing = byModel.get(key);
+    if (existing) {
+      // Backend attaches model-level billing credits to each editor/chat row.
+      // Keep one value per model so summary totals are not multiplied.
+      existing.ai_credits = Math.max(existing.ai_credits, r.ai_credits);
+      existing.suggestions += r.suggestions;
+      existing.acceptances += r.acceptances;
+      existing.lines_accepted += r.lines_accepted;
+      existing.chats += r.chats;
+      existing.engaged_users = Math.max(existing.engaged_users, r.engaged_users);
+    } else {
+      byModel.set(key, {
+        model: r.model || "unknown",
+        ai_credits: r.ai_credits,
+        pct_of_total: 0,
+        suggestions: r.suggestions,
+        acceptances: r.acceptances,
+        acceptance_rate: 0,
+        lines_accepted: r.lines_accepted,
+        chats: r.chats,
+        engaged_users: r.engaged_users,
+      });
+    }
+  }
+  const rows = Array.from(byModel.values());
+  const grandTotal = rows.reduce((sum, r) => sum + r.ai_credits, 0);
+  for (const r of rows) {
+    r.pct_of_total = grandTotal > 0 ? r.ai_credits / grandTotal : 0;
+    r.acceptance_rate = r.suggestions > 0 ? r.acceptances / r.suggestions : 0;
+  }
+  rows.sort((a, b) => b.ai_credits - a.ai_credits);
+
+  if (rows.length === 0 || grandTotal === 0) {
+    return <p className="muted">No per-model AI credit data available for this window.</p>;
+  }
+
+  return (
+    <>
+      <h3 className="subhead">Per-Model Summary (all editors combined)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>AI Credits</th>
+            <th>% of Total</th>
+            <th>Suggestions</th>
+            <th>Acceptances</th>
+            <th>Acc Rate</th>
+            <th>Lines Acc</th>
+            <th>Chats</th>
+            <th>Engaged Users</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.model}>
+              <td>{r.model}</td>
+              <td>{fmtNum(r.ai_credits)}</td>
+              <td>{fmtPct(r.pct_of_total)}</td>
+              <td>{fmtNum(r.suggestions)}</td>
+              <td>{fmtNum(r.acceptances)}</td>
+              <td>{fmtPct(r.acceptance_rate)}</td>
+              <td>{fmtNum(r.lines_accepted)}</td>
+              <td>{fmtNum(r.chats)}</td>
+              <td>{fmtNum(r.engaged_users)}</td>
+            </tr>
+          ))}
+          <tr style={{ fontWeight: "bold", borderTop: "2px solid var(--border)" }}>
+            <td>Total</td>
+            <td>{fmtNum(grandTotal)}</td>
+            <td>100%</td>
+            <td colSpan={6}></td>
+          </tr>
+        </tbody>
+      </table>
+    </>
+  );
+}
+
 export function ModelTable({ data }: { data: ModelBreakdown }): JSX.Element {
   return (
     <>
-      <h3 className="subhead">Code Models</h3>
+      <h3 className="subhead" style={{ marginTop: 16 }}>
+        Code Models
+      </h3>
       <table>
         <thead>
           <tr>

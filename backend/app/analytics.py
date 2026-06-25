@@ -13,7 +13,7 @@ from datetime import date as date_cls
 from typing import Any
 
 from . import db
-from .config import settings
+from .config import BILLING_MIN_DATE, settings
 
 # ---------------------------------------------------------------------------
 # Window helpers
@@ -303,7 +303,9 @@ def _team_member_rollup(
             for row in conn.execute(
                 f"SELECT login, SUM(quantity) AS qty FROM billing_usage "
                 f"WHERE date BETWEEN ? AND ? AND lower(product) LIKE '%copilot%' "
+                f"{_BILLING_MIN_DATE_SQL} "
                 f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+                f"{_billing_dedup_sql(conn, start_iso, end_iso)} "
                 f"AND lower(login) IN ({lower_placeholders}) GROUP BY login",
                 (start_iso, end_iso, *ordered_lower),
             ).fetchall():
@@ -312,7 +314,9 @@ def _team_member_rollup(
             for row in conn.execute(
                 f"SELECT login, SUM(net_amount_usd) AS net FROM billing_usage "
                 f"WHERE date BETWEEN ? AND ? AND lower(product) LIKE '%copilot%' "
+                f"{_BILLING_MIN_DATE_SQL} "
                 f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+                f"{_billing_dedup_sql(conn, start_iso, end_iso)} "
                 f"AND lower(login) IN ({lower_placeholders}) GROUP BY login",
                 (start_iso, end_iso, *ordered_lower),
             ).fetchall():
@@ -616,11 +620,14 @@ def model_breakdown(
             (start_iso, end_iso, scope, team_slug),
         ).fetchall()
         try:
+            dedup = _billing_dedup_sql(conn, start_iso, end_iso)
             billing_rows = conn.execute(
                 "SELECT sku, model, SUM(quantity) AS qty "
                 "FROM billing_usage WHERE date BETWEEN ? AND ? "
+                f"{_BILLING_MIN_DATE_SQL} "
                 "AND lower(product) LIKE '%copilot%' "
                 f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+                f"{dedup} "
                 "GROUP BY sku, model",
                 (start_iso, end_iso),
             ).fetchall()
@@ -628,11 +635,10 @@ def model_breakdown(
             billing_rows = []
 
     # Build model→ai_credits lookup from billing data (normalized).
+    # This map can include "unspecified", but model tables below will not.
     credits_by_model: dict[str, float] = {}
     for br in billing_rows:
         model_name = _normalize_model_name(br["model"] or _model_from_sku(br["sku"]))
-        if model_name == "unspecified":
-            continue
         credits_by_model[model_name] = (
             credits_by_model.get(model_name, 0.0) + float(br["qty"] or 0)
         )
@@ -643,6 +649,9 @@ def model_breakdown(
         sug = r["suggestions"] or 0
         acc = r["acceptances"] or 0
         normalized = _normalize_model_name(r["model"])
+        if normalized == "unspecified":
+            # Product requirement: model-level tables must not show unspecified.
+            continue
         entry = {
             "editor": r["editor"],
             "model": normalized,
@@ -661,10 +670,6 @@ def model_breakdown(
             chat.append(entry)
         else:
             code.append(entry)
-
-    # Skip billing-only models (those without metrics data). These indicate
-    # a data misalignment between billing and metrics APIs and have no editor
-    # or usage context. Include only models with actual usage metrics.
 
     code.sort(key=lambda x: x["acceptances"], reverse=True)
     chat.sort(key=lambda x: x["chats"], reverse=True)
@@ -685,6 +690,7 @@ def model_breakdown(
                         f"SELECT model, sku, SUM(quantity) AS qty, "
                         f"SUM(net_amount_usd) AS net "
                         f"FROM billing_usage WHERE date BETWEEN ? AND ? "
+                        f"{_BILLING_MIN_DATE_SQL} "
                         f"AND lower(product) LIKE '%copilot%' "
                         f"AND {_COPILOT_BILLABLE_SKU_SQL} "
                         f"AND lower(login) IN ({ph}) "
@@ -696,6 +702,8 @@ def model_breakdown(
                     billing_team = []
                 for br in billing_team:
                     model_name = _normalize_model_name(br["model"] or _model_from_sku(br["sku"]))
+                    if model_name == "unspecified":
+                        continue
                     code.append({
                         "editor": "",
                         "model": model_name,
@@ -777,7 +785,9 @@ def _consumption_cost_usd(
     """
     query = (
         "SELECT SUM(net_amount_usd) AS net FROM billing_usage "
-        "WHERE date BETWEEN ? AND ? AND lower(product) LIKE '%copilot%'"
+        "WHERE date BETWEEN ? AND ? "
+        f"{_BILLING_MIN_DATE_SQL} "
+        "AND lower(product) LIKE '%copilot%'"
     )
     params: list[Any] = [start_iso, end_iso]
     if logins is not None:
@@ -787,6 +797,8 @@ def _consumption_cost_usd(
         query += f" AND lower(login) IN ({placeholders})"
         params.extend(sorted(login.lower() for login in logins))
     with db.connect() as conn:
+        dedup = _billing_dedup_sql(conn, start_iso, end_iso)
+        query += f" {dedup}"
         row = conn.execute(query, params).fetchone()
     return round(float(row["net"] or 0.0), 2) if row else 0.0
 
@@ -1254,8 +1266,10 @@ def users_list(
         credit_rows = conn.execute(
             "SELECT lower(login) AS login, SUM(quantity) AS qty "
             "FROM billing_usage WHERE date BETWEEN ? AND ? "
+            f"{_BILLING_MIN_DATE_SQL} "
             "AND lower(product) LIKE '%copilot%' "
             f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            f"{_billing_dedup_sql(conn, start_iso, end_iso)} "
             "AND login != '' "
             "GROUP BY lower(login)",
             (start_iso, end_iso),
@@ -1448,6 +1462,32 @@ _COPILOT_BILLABLE_SKU_SQL = (
     "OR lower(sku) LIKE '%ai_credit%' OR lower(sku) LIKE '%ai credit%')"
 )
 
+# Query-time guard so rows imported before billing launch never leak into
+# rollups, even if legacy data still exists in the DB.
+_BILLING_MIN_DATE_SQL = f"AND date >= '{BILLING_MIN_DATE}'"
+
+
+def _billing_dedup_sql(
+    conn: Any, start_iso: str, end_iso: str,
+) -> str:
+    """Return a SQL fragment that prevents double-counting billing rows.
+
+    When both model-attributed rows (from CSV AI-usage import) and
+    non-model rows (from CSV usage import or API snapshots) exist for the
+    same window, the non-model rows are duplicate aggregates. This helper
+    returns ``"AND model != ''"`` when model-attributed data is available,
+    or ``""`` when only non-model data exists.
+    """
+    has = conn.execute(
+        "SELECT 1 FROM billing_usage WHERE date BETWEEN ? AND ? "
+        f"{_BILLING_MIN_DATE_SQL} "
+        "AND lower(product) LIKE '%copilot%' "
+        f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+        "AND model != '' LIMIT 1",
+        (start_iso, end_iso),
+    ).fetchone()
+    return "AND model != ''" if has else ""
+
 
 def _is_copilot_billable_sku(sku: str | None) -> bool:
     """Return True for billable Copilot SKUs (legacy premium requests + AI credits)."""
@@ -1459,13 +1499,41 @@ def _is_copilot_billable_sku(sku: str | None) -> bool:
     return "ai_credit" in s or "ai credit" in s
 
 
+def _normalize_billing_label(value: str | None) -> str:
+    """Normalize free-form billing labels for stable grouping."""
+    if not value:
+        return ""
+    s = value.strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s
+
+
+def _canonical_billable_sku(sku: str | None) -> str:
+    """Map billable Copilot SKU variants to canonical names."""
+    s = _normalize_billing_label(sku)
+    if "premium" in s and "request" in s:
+        return "copilot_premium_request"
+    if "ai_credit" in s:
+        return "copilot_ai_credit"
+    return s or "unknown"
+
+
+def _canonical_copilot_product(product: str | None) -> str:
+    """Map Copilot product label variants to one canonical value."""
+    s = _normalize_billing_label(product)
+    if "copilot" in s:
+        return "copilot"
+    return s or "unknown"
+
+
 def _model_from_sku(sku: str | None) -> str:
     """Extract a model name from a billing SKU.
 
     GitHub's enhanced-billing SKUs for legacy premium requests follow the
     shape ``"Copilot Premium Request - <model>"``. Anything past the last
     ``-`` is treated as the model name; unparseable or model-less SKUs
-    become ``"unspecified"`` so they still show up in the breakdown.
+    become ``"unspecified"``.
     """
     if not sku:
         return "unspecified"
@@ -1484,6 +1552,13 @@ def _model_from_sku(sku: str | None) -> str:
 _CLAUDE_REORDER_RE = re.compile(r"^claude-(.+?)-(sonnet|opus|haiku)(.*)$")
 # Trailing version hyphens: -3-5 → -3.5 at end of string.
 _TRAILING_VERSION_RE = re.compile(r"-(\d+)-(\d+)$")
+_GPT_HIGH_RE = re.compile(r"(^|-)gpt-5\.(4|5)($|-)")
+_GPT_LOW_RE = re.compile(r"(^|-)gpt-5\.(2|3)($|-)")
+
+# Display strings returned with ``ai_credits_summary`` to keep frontend labels
+# aligned with backend model-tier rules.
+HIGH_TIER_LABELS = ["Opus", "GPT-5.4/5.5", "Gemini Pro"]
+LOW_TIER_LABELS = ["Haiku", "Flash", "Auto:*", "Sonnet", "GPT-5.2/5.3", "Code Review"]
 
 
 def _normalize_model_name(name: str) -> str:
@@ -1513,6 +1588,35 @@ def _normalize_model_name(name: str) -> str:
     return s
 
 
+def _model_tier(name: str) -> str | None:
+    """Classify model into ``high`` / ``low`` tiers for balanced-user analysis.
+
+    High-tier takes precedence over the generic ``Auto:*`` low-tier rule so
+    labels such as ``Auto: GPT-5.4`` still count as high-tier usage.
+    """
+    normalized = _normalize_model_name(name)
+    if "opus" in normalized:
+        return "high"
+    if _GPT_HIGH_RE.search(normalized):
+        return "high"
+    if "gemini" in normalized and "pro" in normalized:
+        return "high"
+
+    if "haiku" in normalized:
+        return "low"
+    if "flash" in normalized:
+        return "low"
+    if "sonnet" in normalized:
+        return "low"
+    if "code-review" in normalized:
+        return "low"
+    if _GPT_LOW_RE.search(normalized):
+        return "low"
+    if normalized.startswith("auto:") or normalized.startswith("auto-"):
+        return "low"
+    return None
+
+
 def ai_credits_summary(
     days: int = 30,
     start: str | None = None,
@@ -1525,44 +1629,81 @@ def ai_credits_summary(
     """
     start_iso, end_iso, _ = _window(days=days, start=start, end=end, default_days=30)
     with db.connect() as conn:
+        dedup = _billing_dedup_sql(conn, start_iso, end_iso)
         sku_rows = conn.execute(
             "SELECT sku, product, SUM(quantity) AS qty, "
             "SUM(gross_amount_usd) AS gross, SUM(net_amount_usd) AS net "
             "FROM billing_usage WHERE date BETWEEN ? AND ? "
+            f"{_BILLING_MIN_DATE_SQL} "
             "AND lower(product) LIKE '%copilot%' "
-            "GROUP BY sku, product ORDER BY qty DESC",
+            f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            f"{dedup} "
+            "GROUP BY sku, product",
             (start_iso, end_iso),
         ).fetchall()
         per_user_rows = conn.execute(
             "SELECT login, SUM(quantity) AS qty, "
             "SUM(gross_amount_usd) AS gross, SUM(net_amount_usd) AS net "
             "FROM billing_usage WHERE date BETWEEN ? AND ? "
+            f"{_BILLING_MIN_DATE_SQL} "
             "AND lower(product) LIKE '%copilot%' "
             f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            f"{dedup} "
             "AND login != '' "
             "GROUP BY login ORDER BY qty DESC LIMIT 25",
+            (start_iso, end_iso),
+        ).fetchall()
+        per_model_user_rows = conn.execute(
+            "SELECT model, sku, login, SUM(quantity) AS qty "
+            "FROM billing_usage WHERE date BETWEEN ? AND ? "
+            f"{_BILLING_MIN_DATE_SQL} "
+            "AND lower(product) LIKE '%copilot%' "
+            f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            f"{dedup} "
+            "AND login != '' "
+            "GROUP BY model, sku, login",
             (start_iso, end_iso),
         ).fetchall()
         totals_row = conn.execute(
             "SELECT SUM(quantity) AS qty, SUM(net_amount_usd) AS net "
             "FROM billing_usage WHERE date BETWEEN ? AND ? "
+            f"{_BILLING_MIN_DATE_SQL} "
             "AND lower(product) LIKE '%copilot%' "
-            f"AND {_COPILOT_BILLABLE_SKU_SQL}",
+            f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            f"{dedup}",
             (start_iso, end_iso),
         ).fetchone()
         has_any_row = conn.execute(
-            "SELECT COUNT(*) AS n FROM billing_usage"
+            "SELECT COUNT(*) AS n FROM billing_usage "
+            "WHERE date >= ? AND lower(product) LIKE '%copilot%'",
+            (BILLING_MIN_DATE,)
         ).fetchone()
+
+    sku_totals: dict[tuple[str, str], dict[str, float]] = {}
+    for r in sku_rows:
+        sku_key = _canonical_billable_sku(r["sku"])
+        product_key = _canonical_copilot_product(r["product"])
+        bucket = sku_totals.setdefault(
+            (sku_key, product_key),
+            {"quantity": 0.0, "gross_amount_usd": 0.0, "net_amount_usd": 0.0},
+        )
+        bucket["quantity"] += float(r["qty"] or 0)
+        bucket["gross_amount_usd"] += float(r["gross"] or 0)
+        bucket["net_amount_usd"] += float(r["net"] or 0)
 
     skus = [
         {
-            "sku": r["sku"],
-            "product": r["product"],
-            "quantity": float(r["qty"] or 0),
-            "gross_amount_usd": round(float(r["gross"] or 0), 2),
-            "net_amount_usd": round(float(r["net"] or 0), 2),
+            "sku": sku,
+            "product": product,
+            "quantity": vals["quantity"],
+            "gross_amount_usd": round(vals["gross_amount_usd"], 2),
+            "net_amount_usd": round(vals["net_amount_usd"], 2),
         }
-        for r in sku_rows
+        for (sku, product), vals in sorted(
+            sku_totals.items(),
+            key=lambda item: item[1]["quantity"],
+            reverse=True,
+        )
     ]
     top_users = [
         {
@@ -1573,6 +1714,102 @@ def ai_credits_summary(
         }
         for r in per_user_rows
     ]
+
+    # Build model -> top users from billing usage. Grouping key is normalized
+    # so variants across data sources roll up together; display label preserves
+    # human-friendly model strings from billing rows when available.
+    model_totals: dict[str, float] = defaultdict(float)
+    model_user_totals: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    model_display: dict[str, str] = {}
+    user_totals: dict[str, float] = defaultdict(float)
+    user_high_totals: dict[str, float] = defaultdict(float)
+    user_low_totals: dict[str, float] = defaultdict(float)
+    user_models: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    for row in per_model_user_rows:
+        raw_model = (row["model"] or _model_from_sku(row["sku"]) or "").strip()
+        model_key = _normalize_model_name(raw_model)
+        if model_key in {"unspecified", "unknown"}:
+            continue
+        qty = float(row["qty"] or 0)
+        if qty <= 0:
+            continue
+        model_totals[model_key] += qty
+        login = (row["login"] or "").strip()
+        if login:
+            model_user_totals[model_key][login] += qty
+            user_totals[login] += qty
+            tier = _model_tier(raw_model)
+            if tier == "high":
+                user_high_totals[login] += qty
+            elif tier == "low":
+                user_low_totals[login] += qty
+            if tier:
+                per_user_model = user_models[login].setdefault(
+                    model_key,
+                    {"model": raw_model or model_key, "quantity": 0.0, "tier": tier},
+                )
+                per_user_model["quantity"] += qty
+        if model_key not in model_display and raw_model and raw_model.lower() != "unspecified":
+            model_display[model_key] = raw_model
+
+    top_users_per_model: list[dict[str, Any]] = []
+    for model_key, total in sorted(model_totals.items(), key=lambda kv: kv[1], reverse=True):
+        per_user = sorted(
+            model_user_totals[model_key].items(),
+            key=lambda kv: kv[1],
+            reverse=True,
+        )[:5]
+        if total <= 0:
+            continue
+        top_users_per_model.append(
+            {
+                "model": model_display.get(model_key, model_key),
+                "total_ai_credits": round(total, 2),
+                "top_users": [
+                    {
+                        "login": login,
+                        "ai_credits": round(qty, 2),
+                        "percentage": round((qty / total) * 100.0, 2),
+                    }
+                    for login, qty in per_user
+                ],
+            }
+        )
+
+    balanced_threshold = 20.0
+    balanced_users: list[dict[str, Any]] = []
+    for login, total in user_totals.items():
+        if total <= 0:
+            continue
+        high_pct = (user_high_totals.get(login, 0.0) / total) * 100.0
+        low_pct = (user_low_totals.get(login, 0.0) / total) * 100.0
+        if high_pct < balanced_threshold or low_pct < balanced_threshold:
+            continue
+
+        model_rows = sorted(
+            user_models.get(login, {}).values(),
+            key=lambda row: row["quantity"],
+            reverse=True,
+        )
+        balanced_users.append(
+            {
+                "login": login,
+                "total_ai_credits": round(total, 2),
+                "high_pct": round(high_pct, 2),
+                "low_pct": round(low_pct, 2),
+                "models": [
+                    {
+                        "model": row["model"],
+                        "quantity": round(row["quantity"], 2),
+                        "pct": round((row["quantity"] / total) * 100.0, 2),
+                        "tier": row["tier"],
+                    }
+                    for row in model_rows
+                ],
+            }
+        )
+    balanced_users.sort(key=lambda row: row["total_ai_credits"], reverse=True)
+
     return {
         "window_start": start_iso,
         "window_end": end_iso,
@@ -1583,6 +1820,11 @@ def ai_credits_summary(
         ),
         "skus": skus,
         "top_users": top_users,
+        "top_users_per_model": top_users_per_model,
+        "balanced_user_threshold_pct": balanced_threshold,
+        "balanced_user_high_tiers": HIGH_TIER_LABELS,
+        "balanced_user_low_tiers": LOW_TIER_LABELS,
+        "balanced_users": balanced_users,
         "tokens_available": False,
         "tokens_note": TOKENS_NOTE,
     }
@@ -1598,11 +1840,14 @@ def ai_credits_for_user(
     start_iso, end_iso, _ = _window(days=days, start=start, end=end, default_days=30)
     with db.connect() as conn:
         try:
+            dedup = _billing_dedup_sql(conn, start_iso, end_iso)
             rows = conn.execute(
                 "SELECT date, sku, model, SUM(quantity) AS qty, SUM(net_amount_usd) AS net "
                 "FROM billing_usage WHERE date BETWEEN ? AND ? "
+                f"{_BILLING_MIN_DATE_SQL} "
                 "AND lower(login) = lower(?) "
                 "AND lower(product) LIKE '%copilot%' "
+                f"{dedup} "
                 "GROUP BY date, sku, model ORDER BY date ASC, sku ASC",
                 (start_iso, end_iso, login),
             ).fetchall()
@@ -1689,8 +1934,10 @@ def ai_credits_for_team(
         rows = conn.execute(
             f"SELECT login, SUM(quantity) AS qty, SUM(net_amount_usd) AS net "
             f"FROM billing_usage WHERE date BETWEEN ? AND ? "
+            f"{_BILLING_MIN_DATE_SQL} "
             f"AND lower(product) LIKE '%copilot%' "
             f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            f"{_billing_dedup_sql(conn, start_iso, end_iso)} "
             f"AND lower(login) IN ({placeholders}) "
             f"GROUP BY login ORDER BY qty DESC",
             (start_iso, end_iso, *[m.lower() for m in members]),

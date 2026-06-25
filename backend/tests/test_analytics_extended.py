@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app import analytics, db
+from app.config import BILLING_MIN_DATE
 from app.snapshot import _flatten_languages, _flatten_models, _normalize_seat
 
 
@@ -203,12 +204,52 @@ def test_model_breakdown_splits_code_and_chat(db_with_models: None) -> None:
     # Act
     out = analytics.model_breakdown(days=7)
 
-    # Assert
-    assert {r["model"] for r in out["code"]} == {"gpt-4o-copilot", "claude-3-5-sonnet"}
+    # Assert — billing-only/unspecified models must not appear in model tables.
+    assert {r["model"] for r in out["code"]} == {"gpt-4o-copilot", "claude-sonnet-3.5"}
     assert {r["model"] for r in out["chat"]} == {"gpt-4o"}
     # acceptance_rate must be computed and bounded.
     for r in out["code"]:
         assert 0.0 <= r["acceptance_rate"] <= 1.0
+
+
+def test_ai_credits_summary_excludes_pre_billing_min_date(db_with_models: None) -> None:
+    """Org AI-credit totals ignore rows older than BILLING_MIN_DATE."""
+    cutoff = datetime.fromisoformat(BILLING_MIN_DATE).date()
+    db.replace_billing_usage(
+        [
+            {
+                "date": (cutoff - timedelta(days=1)).isoformat(),
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "Copilot Premium Request - gpt-4o-copilot",
+                "unit_type": "request",
+                "quantity": 999,
+                "gross_amount_usd": 99.9,
+                "discount_amount_usd": 0.0,
+                "net_amount_usd": 99.9,
+                "repository_name": "",
+            },
+            {
+                "date": cutoff.isoformat(),
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "Copilot Premium Request - gpt-4o-copilot",
+                "unit_type": "request",
+                "quantity": 7,
+                "gross_amount_usd": 0.7,
+                "discount_amount_usd": 0.0,
+                "net_amount_usd": 0.7,
+                "repository_name": "",
+            },
+        ]
+    )
+
+    out = analytics.ai_credits_summary(
+        start=(cutoff - timedelta(days=1)).isoformat(),
+        end=cutoff.isoformat(),
+    )
+
+    assert out["total_ai_credits"] == 7.0
 
 
 def test_model_breakdown_filters_to_team(db_with_models: None) -> None:
@@ -264,7 +305,7 @@ def test_model_breakdown_includes_ai_credits(db_with_models: None) -> None:
     assert chat_gpt4o["ai_credits"] == 10
 
     # Model with no billing data should have 0 credits.
-    code_claude = next(r for r in out["code"] if r["model"] == "claude-3-5-sonnet")
+    code_claude = next(r for r in out["code"] if r["model"] == "claude-sonnet-3.5")
     assert code_claude["ai_credits"] == 0.0
 
 
@@ -286,8 +327,16 @@ def test_cost_for_window_reflects_consumption(db_with_models: None) -> None:
     long_ = analytics.cost_for_window(days=60)
 
     # Assert
-    assert short["window_cost_usd"] == pytest.approx(30.0, rel=0.01)  # 30d × $1/day
-    assert long_["window_cost_usd"] == pytest.approx(short["window_cost_usd"] * 2.0, rel=0.01)
+    today = datetime.now(UTC).date()
+    cutoff = datetime.fromisoformat(BILLING_MIN_DATE).date()
+
+    short_start = today - timedelta(days=29)
+    long_start = today - timedelta(days=59)
+    short_billed_days = max(0, (today - max(short_start, cutoff)).days + 1)
+    long_billed_days = max(0, (today - max(long_start, cutoff)).days + 1)
+
+    assert short["window_cost_usd"] == pytest.approx(float(short_billed_days), rel=0.01)
+    assert long_["window_cost_usd"] == pytest.approx(float(long_billed_days), rel=0.01)
     assert "seats_in_window" not in short
     assert "seat_cost_usd" not in short
 

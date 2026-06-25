@@ -6,7 +6,7 @@ import {
   toWindowParams,
   type WindowState,
 } from "./DateRangeSelector";
-import { fmtNum, fmtPct, Kpi, ModelTable, PrCorrelationTable, fmtMoney } from "./TeamsTab";
+import { fmtNum, fmtPct, Kpi, ModelSummaryTable, ModelTable, PrCorrelationTable, fmtMoney } from "./TeamsTab";
 
 export function QualityTab(): JSX.Element {
   const [win, setWin] = useState<WindowState>(defaultWindow(30));
@@ -75,6 +75,7 @@ export function QualityTab(): JSX.Element {
 
       <div className="panel">
         <h2>Model Usage (Org)</h2>
+        <ModelSummaryTable data={data.model_breakdown} />
         <ModelTable data={data.model_breakdown} />
       </div>
 
@@ -215,7 +216,7 @@ export function QualityTab(): JSX.Element {
                 }
               />
             </div>
-            <h3 className="subhead">By SKU</h3>
+            <h3 className="subhead">By Billable SKU</h3>
             <table>
               <thead>
                 <tr>

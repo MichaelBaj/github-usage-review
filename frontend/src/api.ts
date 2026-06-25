@@ -378,6 +378,33 @@ export interface AiCreditUser {
   net_amount_usd: number;
 }
 
+export interface AiCreditModelUser {
+  login: string;
+  ai_credits: number;
+  percentage: number;
+}
+
+export interface AiCreditTopUsersPerModel {
+  model: string;
+  total_ai_credits: number;
+  top_users: AiCreditModelUser[];
+}
+
+export interface AiCreditBalancedModelRow {
+  model: string;
+  quantity: number;
+  pct: number;
+  tier: "high" | "low";
+}
+
+export interface AiCreditBalancedUser {
+  login: string;
+  total_ai_credits: number;
+  high_pct: number;
+  low_pct: number;
+  models: AiCreditBalancedModelRow[];
+}
+
 export interface AiCreditsSummary {
   window_start: string;
   window_end: string;
@@ -386,6 +413,11 @@ export interface AiCreditsSummary {
   total_ai_credit_cost_usd: number;
   skus: AiCreditSku[];
   top_users: AiCreditUser[];
+  top_users_per_model?: AiCreditTopUsersPerModel[];
+  balanced_user_threshold_pct?: number;
+  balanced_user_high_tiers?: string[];
+  balanced_user_low_tiers?: string[];
+  balanced_users?: AiCreditBalancedUser[];
   tokens_available: boolean;
   tokens_note: string;
 }

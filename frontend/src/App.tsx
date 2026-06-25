@@ -4,14 +4,17 @@ import { SummaryTab } from "./components/SummaryTab";
 import { TeamsTab } from "./components/TeamsTab";
 import { UsersTab } from "./components/UsersTab";
 import { QualityTab } from "./components/QualityTab";
+// Calendar-date versioning (YYYY-MM-DD)
+const VERSION = "2026-06-24";
+
 
 type Tab = "summary" | "teams" | "users" | "quality";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "summary", label: "Summary" },
+  { id: "quality", label: "Quality & Models" },
   { id: "teams", label: "Teams" },
   { id: "users", label: "Users" },
-  { id: "quality", label: "Quality & Models" },
 ];
 
 function tabFromHash(): Tab {
@@ -136,6 +139,7 @@ export function App(): JSX.Element {
         <div>
           <h1>Copilot Usage Review</h1>
           <div className="meta">Last data load: {lastLoadLabel}</div>
+                    <div className="meta">Version: {VERSION}</div>
           {lastLoad.historyDays != null ? (
             <div className="meta">History collected: {lastLoad.historyDays} days</div>
           ) : null}
