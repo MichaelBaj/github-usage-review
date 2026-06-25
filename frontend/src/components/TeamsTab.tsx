@@ -279,7 +279,9 @@ export function ModelSummaryTable({ data }: { data: ModelBreakdown }): JSX.Eleme
       existing.acceptances += r.acceptances;
       existing.lines_accepted += r.lines_accepted;
       existing.chats += r.chats;
-      existing.engaged_users = Math.max(existing.engaged_users, r.engaged_users);
+      // Do not aggregate engaged_users — same user may use multiple models,
+      // so per-model counts cannot be summed. Set to 0 to exclude from display.
+      existing.engaged_users = 0;
     } else {
       byModel.set(key, {
         model: r.model || "unknown",
@@ -290,7 +292,7 @@ export function ModelSummaryTable({ data }: { data: ModelBreakdown }): JSX.Eleme
         acceptance_rate: 0,
         lines_accepted: r.lines_accepted,
         chats: r.chats,
-        engaged_users: r.engaged_users,
+        engaged_users: 0,
       });
     }
   }
@@ -320,7 +322,6 @@ export function ModelSummaryTable({ data }: { data: ModelBreakdown }): JSX.Eleme
             <th>Acc Rate</th>
             <th>Lines Acc</th>
             <th>Chats</th>
-            <th>Engaged Users</th>
           </tr>
         </thead>
         <tbody>
@@ -334,14 +335,13 @@ export function ModelSummaryTable({ data }: { data: ModelBreakdown }): JSX.Eleme
               <td>{fmtPct(r.acceptance_rate)}</td>
               <td>{fmtNum(r.lines_accepted)}</td>
               <td>{fmtNum(r.chats)}</td>
-              <td>{fmtNum(r.engaged_users)}</td>
             </tr>
           ))}
           <tr style={{ fontWeight: "bold", borderTop: "2px solid var(--border)" }}>
             <td>Total</td>
             <td>{fmtNum(grandTotal)}</td>
             <td>100%</td>
-            <td colSpan={6}></td>
+            <td colSpan={5}></td>
           </tr>
         </tbody>
       </table>
