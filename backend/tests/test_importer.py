@@ -331,9 +331,10 @@ def test_import_usage_file_real_shape_maps_features_and_loc() -> None:
     assert trend[0]["lines_suggested"] == 15  # only code_completion language rows
     assert trend[0]["lines_accepted"] == 2
     models = analytics.model_breakdown(start="2026-06-04", end="2026-06-04")
-    code_models = {m["model"] for m in models["code"]}
+    # Org code rows are per-editor, not per-model; check code_editors.
+    assert len(models["code_editors"]) > 0
+    assert models["code_editors"][0]["acceptances"] > 0
     chat_models = {m["model"] for m in models["chat"]}
-    assert "gpt-4o-copilot" in code_models
     assert {"claude-opus-4.6", "gpt-5.2"} <= chat_models
 
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type ModelBreakdown, type TeamDetail, type TeamRow } from "../api";
+import { api, type CodeEditorRow, type ModelBreakdown, type TeamDetail, type TeamRow } from "../api";
 import { defaultWindow, DateRangeSelector, toWindowParams, type WindowState } from "./DateRangeSelector";
 import {
   BarChart,
@@ -258,39 +258,24 @@ interface ModelSummaryRow {
   model: string;
   ai_credits: number;
   pct_of_total: number;
-  suggestions: number;
-  acceptances: number;
-  acceptance_rate: number;
-  lines_accepted: number;
   chats: number;
   engaged_users: number;
 }
 
 export function ModelSummaryTable({ data }: { data: ModelBreakdown }): JSX.Element {
   const byModel = new Map<string, ModelSummaryRow>();
-  for (const r of [...data.code, ...data.chat]) {
+  for (const r of [...data.chat]) {
     const key = (r.model || "unknown").toLowerCase();
     const existing = byModel.get(key);
     if (existing) {
-      // Backend attaches model-level billing credits to each editor/chat row.
-      // Keep one value per model so summary totals are not multiplied.
       existing.ai_credits = Math.max(existing.ai_credits, r.ai_credits);
-      existing.suggestions += r.suggestions;
-      existing.acceptances += r.acceptances;
-      existing.lines_accepted += r.lines_accepted;
       existing.chats += r.chats;
-      // Do not aggregate engaged_users — same user may use multiple models,
-      // so per-model counts cannot be summed. Set to 0 to exclude from display.
       existing.engaged_users = 0;
     } else {
       byModel.set(key, {
         model: r.model || "unknown",
         ai_credits: r.ai_credits,
         pct_of_total: 0,
-        suggestions: r.suggestions,
-        acceptances: r.acceptances,
-        acceptance_rate: 0,
-        lines_accepted: r.lines_accepted,
         chats: r.chats,
         engaged_users: 0,
       });
@@ -300,7 +285,6 @@ export function ModelSummaryTable({ data }: { data: ModelBreakdown }): JSX.Eleme
   const grandTotal = rows.reduce((sum, r) => sum + r.ai_credits, 0);
   for (const r of rows) {
     r.pct_of_total = grandTotal > 0 ? r.ai_credits / grandTotal : 0;
-    r.acceptance_rate = r.suggestions > 0 ? r.acceptances / r.suggestions : 0;
   }
   rows.sort((a, b) => b.ai_credits - a.ai_credits);
 
@@ -317,10 +301,6 @@ export function ModelSummaryTable({ data }: { data: ModelBreakdown }): JSX.Eleme
             <th>Model</th>
             <th>AI Credits</th>
             <th>% of Total</th>
-            <th>Suggestions</th>
-            <th>Acceptances</th>
-            <th>Acc Rate</th>
-            <th>Lines Acc</th>
             <th>Chats</th>
           </tr>
         </thead>
@@ -330,10 +310,6 @@ export function ModelSummaryTable({ data }: { data: ModelBreakdown }): JSX.Eleme
               <td>{r.model}</td>
               <td>{fmtNum(r.ai_credits)}</td>
               <td>{fmtPct(r.pct_of_total)}</td>
-              <td>{fmtNum(r.suggestions)}</td>
-              <td>{fmtNum(r.acceptances)}</td>
-              <td>{fmtPct(r.acceptance_rate)}</td>
-              <td>{fmtNum(r.lines_accepted)}</td>
               <td>{fmtNum(r.chats)}</td>
             </tr>
           ))}
@@ -341,7 +317,53 @@ export function ModelSummaryTable({ data }: { data: ModelBreakdown }): JSX.Eleme
             <td>Total</td>
             <td>{fmtNum(grandTotal)}</td>
             <td>100%</td>
-            <td colSpan={5}></td>
+            <td>{fmtNum(rows.reduce((s, r) => s + r.chats, 0))}</td>
+          </tr>
+        </tbody>
+      </table>
+    </>
+  );
+}
+
+export function CodeEditorTable({ rows }: { rows: CodeEditorRow[] }): JSX.Element {
+  if (!rows || rows.length === 0) {
+    return <p className="muted">No per-editor code completion data available for this window.</p>;
+  }
+  const sorted = [...rows].sort((a, b) => b.acceptances - a.acceptances);
+  const totalSug = sorted.reduce((s, r) => s + r.suggestions, 0);
+  const totalAcc = sorted.reduce((s, r) => s + r.acceptances, 0);
+  const totalLines = sorted.reduce((s, r) => s + r.lines_accepted, 0);
+  const totalRate = totalSug > 0 ? totalAcc / totalSug : 0;
+
+  return (
+    <>
+      <h3 className="subhead" style={{ marginTop: 16 }}>Code Completions by Editor</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Editor</th>
+            <th>Suggestions</th>
+            <th>Acceptances</th>
+            <th>Acc Rate</th>
+            <th>Lines Accepted</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r) => (
+            <tr key={r.editor}>
+              <td>{r.editor}</td>
+              <td>{fmtNum(r.suggestions)}</td>
+              <td>{fmtNum(r.acceptances)}</td>
+              <td>{fmtPct(r.acceptance_rate)}</td>
+              <td>{fmtNum(r.lines_accepted)}</td>
+            </tr>
+          ))}
+          <tr style={{ fontWeight: "bold", borderTop: "2px solid var(--border)" }}>
+            <td>Total</td>
+            <td>{fmtNum(totalSug)}</td>
+            <td>{fmtNum(totalAcc)}</td>
+            <td>{fmtPct(totalRate)}</td>
+            <td>{fmtNum(totalLines)}</td>
           </tr>
         </tbody>
       </table>

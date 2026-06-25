@@ -514,7 +514,10 @@ def breakdowns(
     return {
         "languages": [dict(r) for r in lang_rows],
         "editors": [dict(r) for r in editor_rows],
-        "models": [dict(r) for r in model_rows],
+        "models": [
+            dict(r) for r in model_rows
+            if _normalize_model_name(r["model"]) not in ("unspecified", "unknown")
+        ],
     }
 
 
@@ -608,17 +611,98 @@ def model_breakdown(
     scope = "team" if team else "org"
     team_slug = team or ""
     with db.connect() as conn:
-        rows = conn.execute(
-            "SELECT editor, model, is_chat, "
-            "SUM(suggestions) AS suggestions, SUM(acceptances) AS acceptances, "
-            "SUM(lines_suggested) AS lines_suggested, SUM(lines_accepted) AS lines_accepted, "
-            "SUM(chats) AS chats, SUM(chat_insertions) AS chat_insertions, "
-            "SUM(chat_copies) AS chat_copies, MAX(engaged_users) AS engaged_users "
-            "FROM daily_model_metrics "
-            "WHERE date BETWEEN ? AND ? AND scope = ? AND team_slug = ? "
-            "GROUP BY editor, model, is_chat",
-            (start_iso, end_iso, scope, team_slug),
-        ).fetchall()
+        if team:
+            # Team scope: use daily_model_metrics which has complete per-model breakdown.
+            rows = conn.execute(
+                "SELECT editor, model, is_chat, "
+                "SUM(suggestions) AS suggestions, SUM(acceptances) AS acceptances, "
+                "SUM(lines_suggested) AS lines_suggested, SUM(lines_accepted) AS lines_accepted, "
+                "SUM(chats) AS chats, SUM(chat_insertions) AS chat_insertions, "
+                "SUM(chat_copies) AS chat_copies, MAX(engaged_users) AS engaged_users "
+                "FROM daily_model_metrics "
+                "WHERE date BETWEEN ? AND ? AND scope = ? AND team_slug = ? "
+                "GROUP BY editor, model, is_chat",
+                (start_iso, end_iso, scope, team_slug),
+            ).fetchall()
+        else:
+            # Org scope: for code, use raw_json (same source as kpis/trends).
+            # For chat, use daily_model_metrics (has individual model breakdown).
+            # This ensures model_breakdown totals match KPI totals.
+            day_rows = conn.execute(
+                "SELECT raw_json FROM daily_org_metrics "
+                "WHERE date BETWEEN ? AND ? ORDER BY date ASC",
+                (start_iso, end_iso),
+            ).fetchall()
+            
+            # Aggregate code from raw_json into per-editor rows.
+            code_by_editor: dict[str, dict[str, Any]] = {}
+            for dr in day_rows:
+                raw = json.loads(dr["raw_json"])
+                code = raw.get("copilot_ide_code_completions") or {}
+                for editor_obj in code.get("editors", []) or []:
+                    editor = editor_obj.get("name", "unknown")
+                    if editor not in code_by_editor:
+                        code_by_editor[editor] = {
+                            "editor": editor,
+                            "model": "Code",
+                            "is_chat": 0,
+                            "suggestions": 0,
+                            "acceptances": 0,
+                            "lines_suggested": 0,
+                            "lines_accepted": 0,
+                            "chats": 0,
+                            "chat_insertions": 0,
+                            "chat_copies": 0,
+                            "engaged_users": 0,
+                        }
+                    bucket = code_by_editor[editor]
+                    for model_obj in editor_obj.get("models", []) or []:
+                        bucket["engaged_users"] = max(
+                            bucket["engaged_users"],
+                            model_obj.get("total_engaged_users", 0) or 0,
+                        )
+                        for lang in model_obj.get("languages", []) or []:
+                            bucket["suggestions"] += (
+                                lang.get("total_code_suggestions", 0) or 0
+                            )
+                            bucket["acceptances"] += (
+                                lang.get("total_code_acceptances", 0) or 0
+                            )
+                            bucket["lines_suggested"] += (
+                                lang.get("total_code_lines_suggested", 0) or 0
+                            )
+                            bucket["lines_accepted"] += (
+                                lang.get("total_code_lines_accepted", 0) or 0
+                            )
+
+            # Get chat from daily_model_metrics.
+            chat_rows = conn.execute(
+                "SELECT editor, model, "
+                "SUM(chats) AS chats, SUM(chat_insertions) AS chat_insertions, "
+                "SUM(chat_copies) AS chat_copies, MAX(engaged_users) AS engaged_users "
+                "FROM daily_model_metrics "
+                "WHERE date BETWEEN ? AND ? AND scope = ? AND is_chat = 1 "
+                "GROUP BY editor, model",
+                (start_iso, end_iso, scope),
+            ).fetchall()
+            
+            # Combine code (per-editor) and chat (per-model) rows.
+            rows = list(code_by_editor.values()) + [
+                {
+                    "editor": r["editor"],
+                    "model": r["model"],
+                    "is_chat": 1,
+                    "suggestions": 0,
+                    "acceptances": 0,
+                    "lines_suggested": 0,
+                    "lines_accepted": 0,
+                    "chats": r["chats"],
+                    "chat_insertions": r["chat_insertions"],
+                    "chat_copies": r["chat_copies"],
+                    "engaged_users": r["engaged_users"],
+                }
+                for r in chat_rows
+            ]
         try:
             dedup = _billing_dedup_sql(conn, start_iso, end_iso)
             billing_rows = conn.execute(
@@ -649,8 +733,9 @@ def model_breakdown(
         sug = r["suggestions"] or 0
         acc = r["acceptances"] or 0
         normalized = _normalize_model_name(r["model"])
-        if normalized == "unspecified":
-            # Product requirement: model-level tables must not show unspecified.
+        if normalized in ("unspecified", "unknown"):
+            # Product requirement: model-level tables must not show
+            # unspecified/unknown — these lack actionable detail.
             continue
         entry = {
             "editor": r["editor"],
@@ -671,16 +756,14 @@ def model_breakdown(
         else:
             code.append(entry)
 
-    # Add billing-only models (e.g. "Code Review model") that have no
-    # metrics counterpart.  Skip "auto:" variants (duplicates of explicit
-    # model selections) and "unspecified"/"unknown".
+    # Add billing-only models (e.g. "Code Review model", "Auto: ..."
+    # variants) that have no metrics counterpart.
+    # Skip "unspecified"/"unknown".
     metrics_models = {e["model"] for e in code + chat}
     for model_name, credits in credits_by_model.items():
         if model_name in metrics_models:
             continue
         if model_name in ("unspecified", "unknown"):
-            continue
-        if model_name.startswith("auto:"):
             continue
         chat.append({
             "editor": "",
@@ -745,6 +828,20 @@ def model_breakdown(
                         "ai_credits": float(br["qty"] or 0),
                     })
 
+    # Build per-editor code completion summary for org scope.
+    code_editors: list[dict[str, Any]] = []
+    if not team:
+        for r in code:
+            code_editors.append({
+                "editor": r["editor"],
+                "suggestions": r["suggestions"],
+                "acceptances": r["acceptances"],
+                "acceptance_rate": r["acceptance_rate"],
+                "lines_suggested": r["lines_suggested"],
+                "lines_accepted": r["lines_accepted"],
+            })
+        code_editors.sort(key=lambda x: x["acceptances"], reverse=True)
+
     return {
         "window_start": start_iso,
         "window_end": end_iso,
@@ -752,6 +849,7 @@ def model_breakdown(
         "team": team,
         "code": code,
         "chat": chat,
+        "code_editors": code_editors,
     }
 
 

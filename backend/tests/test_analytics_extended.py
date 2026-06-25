@@ -204,12 +204,19 @@ def test_model_breakdown_splits_code_and_chat(db_with_models: None) -> None:
     # Act
     out = analytics.model_breakdown(days=7)
 
-    # Assert — billing-only/unspecified models must not appear in model tables.
-    assert {r["model"] for r in out["code"]} == {"gpt-4o-copilot", "claude-sonnet-3.5"}
+    # Org code rows are per-editor (model="code"), not per-model.
+    assert {r["model"] for r in out["code"]} == {"code"}
+    assert {r["editor"] for r in out["code"]} == {"vscode"}
     assert {r["model"] for r in out["chat"]} == {"gpt-4o"}
     # acceptance_rate must be computed and bounded.
     for r in out["code"]:
         assert 0.0 <= r["acceptance_rate"] <= 1.0
+    # code_editors has per-editor summary with correct totals.
+    assert len(out["code_editors"]) == 1
+    ce = out["code_editors"][0]
+    assert ce["editor"] == "vscode"
+    assert ce["suggestions"] == 500  # 5 days * (80 + 20)
+    assert ce["acceptances"] == 210  # 5 days * (30 + 12)
 
 
 def test_ai_credits_summary_excludes_pre_billing_min_date(db_with_models: None) -> None:
@@ -298,15 +305,13 @@ def test_model_breakdown_includes_ai_credits(db_with_models: None) -> None:
 
     out = analytics.model_breakdown(days=7)
 
-    code_gpt4o = next(r for r in out["code"] if r["model"] == "gpt-4o-copilot")
-    assert code_gpt4o["ai_credits"] == 42
+    # Org code rows are per-editor with model="Code" — billing credits
+    # for code-specific models appear as billing-only entries in chat.
+    gpt4o_copilot = next(r for r in out["chat"] if r["model"] == "gpt-4o-copilot")
+    assert gpt4o_copilot["ai_credits"] == 42
 
     chat_gpt4o = next(r for r in out["chat"] if r["model"] == "gpt-4o")
     assert chat_gpt4o["ai_credits"] == 10
-
-    # Model with no billing data should have 0 credits.
-    code_claude = next(r for r in out["code"] if r["model"] == "claude-sonnet-3.5")
-    assert code_claude["ai_credits"] == 0.0
 
 
 def test_chat_vs_inline_includes_share(db_with_models: None) -> None:

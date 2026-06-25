@@ -23,6 +23,12 @@ from .github_client import GitHubClient
 log = logging.getLogger(__name__)
 
 
+async def assert_snapshot_permissions() -> None:
+    """Validate token/org access before running expensive snapshot ingestion."""
+    async with GitHubClient() as gh:
+        await gh.assert_snapshot_permissions(include_pr_checks=settings.pr_ingest_enabled)
+
+
 def _flatten_languages(day: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract per-(language, editor) aggregates from a metrics day record."""
     rows: list[dict[str, Any]] = []

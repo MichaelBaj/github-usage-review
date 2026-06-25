@@ -178,6 +178,16 @@ export interface ModelBreakdown {
   team: string | null;
   code: ModelRow[];
   chat: ModelRow[];
+  code_editors: CodeEditorRow[];
+}
+
+export interface CodeEditorRow {
+  editor: string;
+  suggestions: number;
+  acceptances: number;
+  acceptance_rate: number;
+  lines_suggested: number;
+  lines_accepted: number;
 }
 
 export interface ChatVsInline {
@@ -489,7 +499,16 @@ export const api = {
   projections: () => getJson<Projections>("/api/projections"),
   runSnapshot: async (): Promise<unknown> => {
     const r = await fetch("/api/snapshot/run", { method: "POST" });
-    if (!r.ok) throw new Error(`snapshot failed: ${r.status}`);
+    if (!r.ok) {
+      let detail = `${r.status} ${r.statusText}`;
+      try {
+        const payload = (await r.json()) as { detail?: string };
+        detail = payload.detail ?? detail;
+      } catch {
+        // Keep the HTTP status fallback.
+      }
+      throw new Error(`snapshot failed: ${detail}`);
+    }
     return r.json();
   },
   importFile: async (file: File): Promise<ImportResult> => {
