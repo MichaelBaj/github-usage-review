@@ -157,6 +157,125 @@ def _flatten_models(day: dict[str, Any]) -> list[dict[str, Any]]:
     return list(rows.values())
 
 
+# ---------------------------------------------------------------------------
+# Report-format flatteners (2026-03-10 API)
+# ---------------------------------------------------------------------------
+
+
+def _report_flatten_languages(day: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract per-language aggregates from a report-format day record.
+
+    The new API provides ``totals_by_language_feature`` (language × feature).
+    We aggregate across features to produce per-language totals compatible
+    with the ``daily_language_metrics`` schema.  The editor dimension is no
+    longer available, so we store ``"all"`` as the editor.
+    """
+    lang_agg: dict[str, dict[str, int]] = {}
+    for item in day.get("totals_by_language_feature") or []:
+        lang = item.get("language") or "unknown"
+        row = lang_agg.setdefault(lang, {
+            "suggestions": 0,
+            "acceptances": 0,
+            "lines_suggested": 0,
+            "lines_accepted": 0,
+            "engaged_users": 0,
+        })
+        row["suggestions"] += item.get("code_generation_activity_count") or 0
+        row["acceptances"] += item.get("code_acceptance_activity_count") or 0
+        row["lines_suggested"] += item.get("loc_suggested_to_add_sum") or 0
+        row["lines_accepted"] += item.get("loc_added_sum") or 0
+    return [{"language": lang, "editor": "all", **vals} for lang, vals in lang_agg.items()]
+
+
+def _report_flatten_editors(day: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract per-editor aggregates from a report-format day.
+
+    Maps ``totals_by_ide`` into the ``daily_editor_metrics`` schema.
+    Chat-specific columns (``chat_total_chats``, etc.) are no longer
+    available in the new API and default to 0.
+    """
+    rows: list[dict[str, Any]] = []
+    for item in day.get("totals_by_ide") or []:
+        rows.append({
+            "editor": item.get("ide") or "unknown",
+            "suggestions": item.get("code_generation_activity_count") or 0,
+            "acceptances": item.get("code_acceptance_activity_count") or 0,
+            "lines_suggested": item.get("loc_suggested_to_add_sum") or 0,
+            "lines_accepted": item.get("loc_added_sum") or 0,
+            "chat_total_chats": 0,
+            "chat_insertion_events": 0,
+            "chat_copy_events": 0,
+            "engaged_users": 0,
+        })
+    return rows
+
+
+def _report_flatten_models(day: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract per-model aggregates from a report-format day.
+
+    The new API provides ``totals_by_model_feature`` (model × feature).
+    We map feature names to ``is_chat``: code_completion → 0, everything
+    else → 1.  Editor dimension is stored as ``"all"``.
+    """
+    _CODE_FEATURES = {"code_completion"}
+    model_agg: dict[tuple[str, int], dict[str, Any]] = {}
+    for item in day.get("totals_by_model_feature") or []:
+        model_name = item.get("model") or "unknown"
+        feature = item.get("feature") or ""
+        is_chat = 0 if feature in _CODE_FEATURES else 1
+        key = (model_name, is_chat)
+        row = model_agg.setdefault(key, {
+            "editor": "all",
+            "model": model_name,
+            "is_chat": is_chat,
+            "suggestions": 0,
+            "acceptances": 0,
+            "lines_suggested": 0,
+            "lines_accepted": 0,
+            "chats": 0,
+            "chat_insertions": 0,
+            "chat_copies": 0,
+            "engaged_users": 0,
+        })
+        if is_chat:
+            row["chats"] += item.get("user_initiated_interaction_count") or 0
+        else:
+            row["suggestions"] += item.get("code_generation_activity_count") or 0
+            row["acceptances"] += item.get("code_acceptance_activity_count") or 0
+        row["lines_suggested"] += item.get("loc_suggested_to_add_sum") or 0
+        row["lines_accepted"] += item.get("loc_added_sum") or 0
+    return list(model_agg.values())
+
+
+def _report_flatten_features(day: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract per-feature aggregates from a report-format day.
+
+    Maps ``totals_by_feature`` into the ``daily_feature_metrics`` schema.
+    """
+    rows: list[dict[str, Any]] = []
+    for item in day.get("totals_by_feature") or []:
+        rows.append({
+            "feature": item.get("feature") or "unknown",
+            "interactions": item.get("user_initiated_interaction_count") or 0,
+            "code_generations": item.get("code_generation_activity_count") or 0,
+            "code_acceptances": item.get("code_acceptance_activity_count") or 0,
+            "loc_suggested": item.get("loc_suggested_to_add_sum") or 0,
+            "loc_accepted": item.get("loc_added_sum") or 0,
+            "loc_deleted": item.get("loc_deleted_sum") or 0,
+        })
+    return rows
+
+
+def _report_day_to_raw_json(day: dict[str, Any]) -> dict[str, Any]:
+    """Build a ``raw_json`` blob from a report-format day record.
+
+    Stores the day record directly.  The ``_report`` key signals to
+    analytics that this uses the report format rather than the legacy
+    ``copilot_ide_code_completions`` nesting.
+    """
+    return {"_report": True, **day}
+
+
 def _normalize_repo(repo: dict[str, Any]) -> dict[str, Any]:
     """Project a GitHub repo record into our storage row.
 
@@ -254,7 +373,6 @@ async def _ingest_pr_activity(gh: GitHubClient, since_iso: str) -> dict[str, Any
         filtered.append(r)
     filtered.sort(key=lambda r: r.get("pushed_at") or r.get("updated_at") or "", reverse=True)
     filtered = filtered[: settings.pr_max_repos]
-    db.replace_repos([_normalize_repo(r) for r in filtered])
     summary["repos_total"] = len(raw_repos)
 
     semaphore = asyncio.Semaphore(max(1, settings.pr_concurrency))
@@ -324,6 +442,10 @@ async def _ingest_pr_activity(gh: GitHubClient, since_iso: str) -> dict[str, Any
     summary["repos_skipped_unchanged"] = repos_skipped
     summary["prs_upserted"] = total_prs
     summary["pr_details_skipped"] = details_skipped
+    # Store repos AFTER the PR-fetching loop so the skip-unchanged
+    # optimization can compare against the PREVIOUS snapshot's timestamps,
+    # not the just-written ones from this run.
+    db.replace_repos([_normalize_repo(r) for r in filtered])
     return summary
 
 
@@ -426,6 +548,10 @@ def _normalize_seat(seat: dict[str, Any]) -> dict[str, Any]:
 async def run_snapshot() -> dict[str, Any]:
     """Pull all metrics + seats from GitHub and persist them.
 
+    Uses the 2026-03-10 report-download API for Copilot metrics.
+    Falls back to the legacy ``/copilot/metrics`` endpoint when the
+    report API is unavailable (404).
+
     Returns:
         Summary dict with counts and start/end timestamps.
     """
@@ -433,82 +559,84 @@ async def run_snapshot() -> dict[str, Any]:
     summary: dict[str, Any] = {"started_at": datetime.now(UTC).isoformat()}
 
     async with GitHubClient() as gh:
+        # --- Org metrics via report-download API ---
+        report_days: list[dict[str, Any]] = []
         try:
-            days = await gh.org_metrics()
+            report = await gh.org_metrics_report()
+            report_days = report.get("day_totals") or []
+            summary["metrics_api"] = "report"
         except httpx.HTTPStatusError as exc:
-            # GitHub returns 404 when org metrics are unavailable for legitimate
-            # reasons: fewer than 5 telemetry-enabled members in the window,
-            # Copilot Metrics API access disabled in org policy, or no Copilot
-            # subscription. Seats data is still useful, so don't abort the run.
             if exc.response.status_code == 404:
                 log.warning(
-                    "org metrics 404 for %s; common causes: <5 telemetry-enabled "
-                    "members, Copilot Metrics API access disabled in org policy, "
-                    "or org lacks Copilot Business/Enterprise. Continuing with seats only.",
+                    "org metrics report 404 for %s; report API may not be "
+                    "enabled. Continuing with seats only.",
                     gh.org,
                 )
-                days = []
                 summary["org_metrics_error"] = "404"
             else:
                 raise
-        for day in days:
-            date = day.get("date")
+
+        for day in report_days:
+            date = day.get("day")
             if not date:
                 continue
+            raw = _report_day_to_raw_json(day)
             db.upsert_org_day(
                 date,
-                day.get("total_active_users"),
-                day.get("total_engaged_users"),
-                day,
+                day.get("daily_active_users"),
+                None,  # total_engaged_users not in report format
+                raw,
             )
-            db.replace_language_rows(date, _flatten_languages(day))
-            db.replace_editor_rows(date, _flatten_editors(day))
-            db.replace_model_rows(date, "org", "", _flatten_models(day))
-        summary["org_days"] = len(days)
+            db.replace_language_rows(date, _report_flatten_languages(day))
+            db.replace_editor_rows(date, _report_flatten_editors(day))
+            db.replace_model_rows(date, "org", "", _report_flatten_models(day))
+            db.replace_feature_rows(date, _report_flatten_features(day))
+        summary["org_days"] = len(report_days)
 
+        # --- Per-user and user-teams reports for team derivation ---
+        # Fetch the most recent day's user-teams report to refresh team
+        # membership, and ingest per-user data for engaged-user computation.
+        if report_days:
+            latest_day = max(d.get("day", "") for d in report_days)
+            if latest_day:
+                try:
+                    user_team_rows = await gh.user_teams_report(latest_day)
+                    # Derive team membership from user-teams report.
+                    teams_from_report: dict[str, list[str]] = defaultdict(list)
+                    for ut in user_team_rows:
+                        slug = ut.get("slug")
+                        login = ut.get("user_login")
+                        if slug and login:
+                            teams_from_report[slug].append(login)
+                    for slug, members in teams_from_report.items():
+                        db.replace_team_members(slug, members)
+                    summary["user_teams_rows"] = len(user_team_rows)
+                    summary["teams_from_report"] = len(teams_from_report)
+                except httpx.HTTPStatusError as exc:
+                    log.info("user-teams report skipped: %s", exc.response.status_code)
+                    summary["user_teams_error"] = str(exc.response.status_code)
+
+        # --- Also fetch teams list for any additional membership data ---
         teams: list[dict[str, Any]] = []
         try:
             teams = await gh.list_teams()
         except httpx.HTTPStatusError as exc:
             log.warning(
-                "list_teams failed (%s); skipping per-team metrics. "
+                "list_teams failed (%s); skipping team member sync. "
                 "Token likely lacks read:org scope or SSO authorization.",
                 exc.response.status_code,
             )
             summary["teams_error"] = str(exc.response.status_code)
-        team_count = 0
+
         for team in teams:
             slug = team.get("slug")
             if not slug:
                 continue
             try:
-                tdays = await gh.team_metrics(slug)
-            except httpx.HTTPStatusError as exc:
-                # 404 = team has no Copilot data or below privacy threshold; skip.
-                log.info("team %s metrics skipped: %s", slug, exc.response.status_code)
-                tdays = []
-            for record in tdays:
-                date = record.get("date")
-                if not date:
-                    continue
-                db.upsert_team_day(
-                    date,
-                    slug,
-                    record.get("total_active_users"),
-                    record.get("total_engaged_users"),
-                    record,
-                )
-                db.replace_team_language_rows(date, slug, _flatten_languages(record))
-                db.replace_model_rows(date, "team", slug, _flatten_models(record))
-            if tdays:
-                team_count += 1
-            # Refresh team membership so per-user views can roll up PR data by team.
-            try:
                 members = await gh.list_team_members(slug)
                 db.replace_team_members(slug, [m.get("login") for m in members if m.get("login")])
             except httpx.HTTPStatusError as exc:
                 log.info("list_team_members skip %s: %s", slug, exc.response.status_code)
-        summary["teams_with_metrics"] = team_count
         summary["teams_total"] = len(teams)
 
         try:

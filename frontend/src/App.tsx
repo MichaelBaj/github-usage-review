@@ -4,8 +4,8 @@ import { SummaryTab } from "./components/SummaryTab";
 import { TeamsTab } from "./components/TeamsTab";
 import { UsersTab } from "./components/UsersTab";
 import { QualityTab } from "./components/QualityTab";
-// Calendar-date versioning (YYYY-MM-DD)
-const VERSION = "2026-06-24";
+// Calendar-date versioning (YYYY-MM-DD.build)
+const VERSION = "2026-06-26.2";
 
 
 type Tab = "summary" | "teams" | "users" | "quality";
@@ -38,6 +38,7 @@ export function App(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [pendingDbFile, setPendingDbFile] = useState<File | null>(null);
   const [dbImportMode, setDbImportMode] = useState<DbImportMode>("merge");
+  const [snapshotDone, setSnapshotDone] = useState<boolean | null>(null); // true=success, false=fail
 
   useEffect(() => {
     const onHash = (): void => setTab(tabFromHash());
@@ -63,12 +64,16 @@ export function App(): JSX.Element {
   async function refresh(): Promise<void> {
     setRefreshing(true);
     setError(null);
-      setImportResult(null);
+    setImportResult(null);
+    setSnapshotDone(null);
     try {
       await api.runSnapshot();
-        setDataVersion((value) => value + 1);
+      setDataVersion((value) => value + 1);
+      setSnapshotDone(true);
+      setTimeout(() => setSnapshotDone(null), 5000);
     } catch (e) {
       setError((e as Error).message);
+      setSnapshotDone(false);
     } finally {
       setRefreshing(false);
     }
@@ -145,8 +150,8 @@ export function App(): JSX.Element {
           ) : null}
         </div>
         <div className="header-actions">
-          <button onClick={refresh} disabled={refreshing || importing}>
-            {refreshing ? "Refreshing…" : "Refresh snapshot"}
+          <button onClick={refresh} disabled={refreshing || importing} className={snapshotDone === true ? "btn-success" : undefined}>
+            {refreshing ? "Refreshing…" : snapshotDone === true ? "\u2713 Snapshot complete" : "Refresh snapshot"}
           </button>
           <button onClick={exportData} disabled={exporting || importing || refreshing}>
             {exporting ? "Exporting…" : "Export data"}
@@ -178,6 +183,7 @@ export function App(): JSX.Element {
         ))}
       </div>
 
+      {refreshing ? <div className="snapshot-progress"><div className="snapshot-progress-bar" /></div> : null}
       {error ? <div className="error">{error}</div> : null}
       {importResult ? (
         <div className="import-note" title={importResult.warnings.join("\n") || undefined}>

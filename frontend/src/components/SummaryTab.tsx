@@ -5,6 +5,7 @@ import {
   type AiCreditTopUsersPerModel,
   type Breakdowns,
   type CostWindow,
+  type FeatureBreakdown,
   type Kpis,
   type AiCreditsSummary,
   type ModelBreakdown,
@@ -30,6 +31,7 @@ interface State {
   teams: TeamRow[];
   stale: StaleSeat[];
   breakdowns: Breakdowns | null;
+  features: FeatureBreakdown | null;
   cost: CostWindow | null;
   premium: AiCreditsSummary | null;
   modelCreditsTotal: number | null;
@@ -42,6 +44,7 @@ const initial: State = {
   teams: [],
   stale: [],
   breakdowns: null,
+  features: null,
   cost: null,
   premium: null,
   modelCreditsTotal: null,
@@ -159,11 +162,12 @@ export function SummaryTab(): JSX.Element {
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
       const params = toWindowParams(win);
-      const [kpis, teams, stale, breakdowns, cost, premium, models] = await Promise.all([
+      const [kpis, teams, stale, breakdowns, features, cost, premium, models] = await Promise.all([
         api.kpis(params),
         api.teams(params),
         api.staleSeats(),
         api.breakdowns(params),
+        api.features(params).catch(() => null),
         api.cost(params),
         api.aiCredits(params),
         api.models(params),
@@ -175,6 +179,7 @@ export function SummaryTab(): JSX.Element {
         teams,
         stale,
         breakdowns,
+        features,
         cost,
         premium,
         modelCreditsTotal: modelCreditsGrandTotal(models),
@@ -321,7 +326,7 @@ export function SummaryTab(): JSX.Element {
 
           <div className="panel">
             <h2>Breakdowns</h2>
-            {state.breakdowns ? <BreakdownCharts data={state.breakdowns} /> : null}
+            {state.breakdowns ? <BreakdownCharts data={state.breakdowns} features={state.features} /> : null}
           </div>
 
           <div className="row-grid">

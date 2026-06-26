@@ -438,6 +438,10 @@ def test_user_detail_returns_seat_and_prs(db_with_models: None) -> None:
     assert out["totals"]["additions"] == 120
     assert out["per_user_copilot_metrics_available"] is False
     assert "alpha" in out["teams"]
+    assert "pr_ingest_enabled" in out
+    assert len(out["recent_prs"]) == 1
+    assert out["recent_prs"][0]["repo"] == "platform"
+    assert len(out["daily"]) >= 1
 
 
 def test_kpis_include_window_cost(db_with_models: None) -> None:

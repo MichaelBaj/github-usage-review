@@ -1,16 +1,19 @@
 """Thin async wrapper for the GitHub Copilot admin APIs.
 
-Endpoints used:
+Endpoints used (2026-03-10 report-download API):
 
-* ``GET /orgs/{org}/copilot/metrics`` — last 28 days, daily aggregates
-* ``GET /orgs/{org}/team/{team_slug}/copilot/metrics`` — per-team
+* ``GET /orgs/{org}/copilot/metrics/reports/organization-28-day/latest``
+* ``GET /orgs/{org}/copilot/metrics/reports/organization-1-day``
+* ``GET /orgs/{org}/copilot/metrics/reports/users-1-day``
+* ``GET /orgs/{org}/copilot/metrics/reports/user-teams-1-day``
 * ``GET /orgs/{org}/copilot/billing/seats`` — paginated
 * ``GET /orgs/{org}/teams`` — paginated
 
-See https://docs.github.com/en/rest/copilot for full reference.
+See https://docs.github.com/en/rest/copilot/copilot-usage-metrics for full reference.
 """
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -21,6 +24,8 @@ from .config import settings
 GITHUB_API = "https://api.github.com"
 ACCEPT = "application/vnd.github+json"
 API_VERSION = "2022-11-28"
+# Copilot metrics report endpoints require the newer API version.
+METRICS_API_VERSION = "2026-03-10"
 
 
 class SnapshotPreflightError(RuntimeError):
@@ -99,7 +104,122 @@ class GitHubClient:
                 break
             page += 1
 
-    # ----- Copilot metrics -----
+    # ----- Copilot metrics (report-download API, 2026-03-10) -----
+
+    async def _get_report(
+        self, path: str, params: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        """Issue a GET with the metrics API version header; raises on non-2xx."""
+        response = await self._client.get(
+            path,
+            params=params,
+            headers={"X-GitHub-Api-Version": METRICS_API_VERSION},
+        )
+        response.raise_for_status()
+        return response
+
+    async def _download_report(self, download_url: str) -> str:
+        """Download a report file from a signed URL and return raw text.
+
+        Uses a plain client without auth headers — signed Azure blob
+        URLs reject any ``Authorization`` header, even an empty one.
+        """
+        async with httpx.AsyncClient(timeout=30.0) as plain:
+            response = await plain.get(download_url)
+        response.raise_for_status()
+        return response.text
+
+    async def org_metrics_report(self) -> dict[str, Any]:
+        """Return the latest 28-day org metrics report (new API).
+
+        Downloads the report file and returns the parsed JSON containing
+        ``day_totals[]`` with per-day aggregates.  Falls back to
+        enterprise scope on 404.
+        """
+        try:
+            resp = await self._get_report(
+                f"/orgs/{self.org}/copilot/metrics/reports/organization-28-day/latest"
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404 and self.enterprise:
+                resp = await self._get_report(
+                    f"/enterprises/{self.enterprise}/copilot/metrics/reports/enterprise-28-day/latest"
+                )
+            else:
+                raise
+        meta = resp.json()
+        links = meta.get("download_links") or []
+        if not links:
+            return {"day_totals": []}
+        text = await self._download_report(links[0])
+        report = json.loads(text)
+        return report
+
+    async def users_metrics_report(self, day: str) -> list[dict[str, Any]]:
+        """Return per-user metrics for a specific day (NDJSON).
+
+        Falls back to enterprise scope on 404.
+        """
+        try:
+            resp = await self._get_report(
+                f"/orgs/{self.org}/copilot/metrics/reports/users-1-day",
+                params={"day": day},
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (204, 404) and self.enterprise:
+                try:
+                    resp = await self._get_report(
+                        f"/enterprises/{self.enterprise}/copilot/metrics/reports/users-1-day",
+                        params={"day": day},
+                    )
+                except httpx.HTTPStatusError as exc2:
+                    if exc2.response.status_code == 204:
+                        return []
+                    raise
+            elif exc.response.status_code == 204:
+                return []
+            else:
+                raise
+        meta = resp.json()
+        links = meta.get("download_links") or []
+        if not links:
+            return []
+        text = await self._download_report(links[0])
+        return [json.loads(line) for line in text.strip().split("\n") if line.strip()]
+
+    async def user_teams_report(self, day: str) -> list[dict[str, Any]]:
+        """Return user→team mapping for a specific day (NDJSON).
+
+        Falls back to enterprise scope on 404.
+        """
+        try:
+            resp = await self._get_report(
+                f"/orgs/{self.org}/copilot/metrics/reports/user-teams-1-day",
+                params={"day": day},
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (204, 404) and self.enterprise:
+                try:
+                    resp = await self._get_report(
+                        f"/enterprises/{self.enterprise}/copilot/metrics/reports/user-teams-1-day",
+                        params={"day": day},
+                    )
+                except httpx.HTTPStatusError as exc2:
+                    if exc2.response.status_code == 204:
+                        return []
+                    raise
+            elif exc.response.status_code == 204:
+                return []
+            else:
+                raise
+        meta = resp.json()
+        links = meta.get("download_links") or []
+        if not links:
+            return []
+        text = await self._download_report(links[0])
+        return [json.loads(line) for line in text.strip().split("\n") if line.strip()]
+
+    # ----- Legacy Copilot metrics (2022-11-28, deprecated) -----
 
     async def org_metrics(self) -> list[dict[str, Any]]:
         """Return org-level Copilot metrics for the last 28 days.
@@ -107,6 +227,10 @@ class GitHubClient:
         Enterprise-managed orgs return 404 on the org endpoint when metrics
         are surfaced only at the enterprise tier. When ``github_enterprise``
         is configured, fall back to ``/enterprises/{ent}/copilot/metrics``.
+
+        .. deprecated::
+            The ``/copilot/metrics`` endpoint has been removed from the GitHub API.
+            Use :meth:`org_metrics_report` instead.
         """
         try:
             response = await self._get(f"/orgs/{self.org}/copilot/metrics")
@@ -120,7 +244,12 @@ class GitHubClient:
             raise
 
     async def team_metrics(self, team_slug: str) -> list[dict[str, Any]]:
-        """Return Copilot metrics for ``team_slug`` for the last 28 days."""
+        """Return Copilot metrics for ``team_slug`` for the last 28 days.
+
+        .. deprecated::
+            The per-team metrics endpoint has been removed. Use
+            :meth:`users_metrics_report` + :meth:`user_teams_report` instead.
+        """
         response = await self._get(f"/orgs/{self.org}/team/{team_slug}/copilot/metrics")
         return response.json()
 
@@ -296,21 +425,29 @@ class GitHubClient:
             params={"per_page": 1, "page": 1},
         )
 
-        # Metrics can legitimately 404 when org telemetry is below privacy
-        # thresholds. We only fail for explicit auth/permission errors.
+        # Metrics reports (2026-03-10 API). We probe the org-level report
+        # endpoint; 404 may mean the enterprise scope is required instead.
         try:
-            await self._get(f"/orgs/{self.org}/copilot/metrics")
+            await self._get_report(
+                f"/orgs/{self.org}/copilot/metrics/reports/organization-28-day/latest"
+            )
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             if status == 404 and self.enterprise:
-                await _probe(
-                    "Enterprise Copilot metrics access",
-                    f"/enterprises/{self.enterprise}/copilot/metrics",
-                )
+                try:
+                    await self._get_report(
+                        f"/enterprises/{self.enterprise}/copilot/metrics/reports/enterprise-28-day/latest"
+                    )
+                except httpx.HTTPStatusError as exc2:
+                    if exc2.response.status_code in (401, 403):
+                        failures.append(
+                            f"- Enterprise Copilot metrics report access failed "
+                            f"({exc2.response.status_code}). {_action_for(exc2.response.status_code)}"
+                        )
             elif status in (401, 403):
                 failures.append(
-                    "- Copilot metrics access failed "
-                    f"({status}) at GET /orgs/{self.org}/copilot/metrics. "
+                    "- Copilot metrics report access failed "
+                    f"({status}) at GET /orgs/{self.org}/copilot/metrics/reports/organization-28-day/latest. "
                     f"{_action_for(status)}"
                 )
 

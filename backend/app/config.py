@@ -9,8 +9,8 @@ from __future__ import annotations
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Calendar-date versioning (YYYY-MM-DD)
-VERSION = "2026-06-24"
+# Calendar-date versioning (YYYY-MM-DD.build)
+VERSION = "2026-06-26.2"
 # Billing data before this date is rejected during import.
 BILLING_MIN_DATE = "2026-06-01"
 
@@ -50,11 +50,11 @@ class Settings(BaseSettings):
 
     # --- PR correlation ingestion ---
     pr_ingest_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "If true, the snapshot also ingests org pull-request activity for "
-            "ROI/quality correlation. Disabled by default to minimise GitHub "
-            "API usage; the core Copilot usage dashboard works without it."
+            "ROI/quality correlation (PR Correlation, Power-User Concentration). "
+            "Set to false to minimise GitHub API usage if PR data is not needed."
         ),
     )
     pr_lookback_days: int = Field(
@@ -70,11 +70,12 @@ class Settings(BaseSettings):
         description="Concurrent in-flight PR detail requests per snapshot run (unused when pr_fetch_detail is false).",
     )
     pr_fetch_detail: bool = Field(
-        default=False,
+        default=True,
         description=(
             "When true, fetch individual PR detail (additions/deletions/changed_files) "
-            "via one API call per PR. When false (default), only list-level metadata "
-            "is stored — dramatically reducing API calls."
+            "via one API call per new PR. Required for PR size and review-comment "
+            "metrics. Set to false to reduce API calls at the cost of zero-value "
+            "size columns in PR Correlation."
         ),
     )
     pr_include_forks: bool = Field(default=False)

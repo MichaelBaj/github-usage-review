@@ -145,6 +145,22 @@ export interface Breakdowns {
   models: { model: string; acc: number; sug: number; chats: number }[];
 }
 
+export interface FeatureRow {
+  feature: string;
+  interactions: number;
+  code_generations: number;
+  code_acceptances: number;
+  loc_suggested: number;
+  loc_accepted: number;
+  loc_deleted: number;
+}
+
+export interface FeatureBreakdown {
+  window_start: string;
+  window_end: string;
+  features: FeatureRow[];
+}
+
 export interface Projections {
   available: boolean;
   reason?: string;
@@ -311,6 +327,7 @@ export interface UserDetail {
     review_comments: number;
     title: string;
   }[];
+  pr_ingest_enabled: boolean;
   ai_credits: AiCreditsUser;
   per_user_copilot_metrics_available: boolean;
   per_user_copilot_note: string;
@@ -480,6 +497,7 @@ export const api = {
   userDetail: (login: string, p: WindowParams = {}) =>
     getJson<UserDetail>(`/api/users/${encodeURIComponent(login)}${qs(p)}`),
   breakdowns: (p: WindowParams = { days: 30 }) => getJson<Breakdowns>(`/api/breakdowns${qs(p)}`),
+  features: (p: WindowParams = { days: 30 }) => getJson<FeatureBreakdown>(`/api/features${qs(p)}`),
   models: (p: WindowParams = { days: 30 }) => getJson<ModelBreakdown>(`/api/models${qs(p)}`),
   chatVsInline: (p: WindowParams = { days: 30 }) =>
     getJson<ChatVsInline>(`/api/chat-vs-inline${qs(p)}`),

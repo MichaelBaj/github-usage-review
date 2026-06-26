@@ -85,7 +85,20 @@ def _parse_iso(value: str | None) -> datetime | None:
 
 
 def _sum_day(raw: dict[str, Any]) -> dict[str, int]:
-    """Sum suggestions/acceptances across editors and languages for one day."""
+    """Sum suggestions/acceptances across editors and languages for one day.
+
+    Handles both the legacy ``copilot_ide_code_completions`` nesting and the
+    new report format (identified by the ``_report`` key).
+    """
+    if raw.get("_report"):
+        # New report format — flat top-level counters.
+        return {
+            "suggestions": raw.get("code_generation_activity_count") or 0,
+            "acceptances": raw.get("code_acceptance_activity_count") or 0,
+            "lines_suggested": raw.get("loc_suggested_to_add_sum") or 0,
+            "lines_accepted": raw.get("loc_added_sum") or 0,
+        }
+    # Legacy format — traverse nested editor/model/language trees.
     suggestions = acceptances = lines_suggested = lines_accepted = 0
     code = raw.get("copilot_ide_code_completions") or {}
     for editor in code.get("editors", []) or []:
@@ -521,6 +534,37 @@ def breakdowns(
     }
 
 
+def feature_breakdown(
+    days: int = 30,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict[str, Any]:
+    """Return per-feature usage breakdown over a window.
+
+    Features include ``code_completion``, ``chat_panel_agent_mode``,
+    ``copilot_cli``, ``agent_edit``, etc.
+    """
+    start_iso, end_iso, _ = _window(days=days, start=start, end=end, default_days=30)
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT feature, "
+            "SUM(interactions) AS interactions, "
+            "SUM(code_generations) AS code_generations, "
+            "SUM(code_acceptances) AS code_acceptances, "
+            "SUM(loc_suggested) AS loc_suggested, "
+            "SUM(loc_accepted) AS loc_accepted, "
+            "SUM(loc_deleted) AS loc_deleted "
+            "FROM daily_feature_metrics WHERE date BETWEEN ? AND ? "
+            "GROUP BY feature ORDER BY SUM(interactions) + SUM(code_generations) DESC",
+            (start_iso, end_iso),
+        ).fetchall()
+    return {
+        "window_start": start_iso,
+        "window_end": end_iso,
+        "features": [dict(r) for r in rows],
+    }
+
+
 def roi(
     days: int | None = None,
     start: str | None = None,
@@ -638,42 +682,67 @@ def model_breakdown(
             code_by_editor: dict[str, dict[str, Any]] = {}
             for dr in day_rows:
                 raw = json.loads(dr["raw_json"])
-                code = raw.get("copilot_ide_code_completions") or {}
-                for editor_obj in code.get("editors", []) or []:
-                    editor = editor_obj.get("name", "unknown")
-                    if editor not in code_by_editor:
-                        code_by_editor[editor] = {
-                            "editor": editor,
-                            "model": "Code",
-                            "is_chat": 0,
-                            "suggestions": 0,
-                            "acceptances": 0,
-                            "lines_suggested": 0,
-                            "lines_accepted": 0,
-                            "chats": 0,
-                            "chat_insertions": 0,
-                            "chat_copies": 0,
-                            "engaged_users": 0,
-                        }
-                    bucket = code_by_editor[editor]
-                    for model_obj in editor_obj.get("models", []) or []:
-                        bucket["engaged_users"] = max(
-                            bucket["engaged_users"],
-                            model_obj.get("total_engaged_users", 0) or 0,
-                        )
-                        for lang in model_obj.get("languages", []) or []:
-                            bucket["suggestions"] += (
-                                lang.get("total_code_suggestions", 0) or 0
+                if raw.get("_report"):
+                    # New report format: use totals_by_ide directly.
+                    for ide_obj in raw.get("totals_by_ide") or []:
+                        editor = ide_obj.get("ide") or "unknown"
+                        if editor not in code_by_editor:
+                            code_by_editor[editor] = {
+                                "editor": editor,
+                                "model": "Code",
+                                "is_chat": 0,
+                                "suggestions": 0,
+                                "acceptances": 0,
+                                "lines_suggested": 0,
+                                "lines_accepted": 0,
+                                "chats": 0,
+                                "chat_insertions": 0,
+                                "chat_copies": 0,
+                                "engaged_users": 0,
+                            }
+                        bucket = code_by_editor[editor]
+                        bucket["suggestions"] += ide_obj.get("code_generation_activity_count") or 0
+                        bucket["acceptances"] += ide_obj.get("code_acceptance_activity_count") or 0
+                        bucket["lines_suggested"] += ide_obj.get("loc_suggested_to_add_sum") or 0
+                        bucket["lines_accepted"] += ide_obj.get("loc_added_sum") or 0
+                else:
+                    # Legacy format: traverse nested editors/models/languages.
+                    code = raw.get("copilot_ide_code_completions") or {}
+                    for editor_obj in code.get("editors", []) or []:
+                        editor = editor_obj.get("name", "unknown")
+                        if editor not in code_by_editor:
+                            code_by_editor[editor] = {
+                                "editor": editor,
+                                "model": "Code",
+                                "is_chat": 0,
+                                "suggestions": 0,
+                                "acceptances": 0,
+                                "lines_suggested": 0,
+                                "lines_accepted": 0,
+                                "chats": 0,
+                                "chat_insertions": 0,
+                                "chat_copies": 0,
+                                "engaged_users": 0,
+                            }
+                        bucket = code_by_editor[editor]
+                        for model_obj in editor_obj.get("models", []) or []:
+                            bucket["engaged_users"] = max(
+                                bucket["engaged_users"],
+                                model_obj.get("total_engaged_users", 0) or 0,
                             )
-                            bucket["acceptances"] += (
-                                lang.get("total_code_acceptances", 0) or 0
-                            )
-                            bucket["lines_suggested"] += (
-                                lang.get("total_code_lines_suggested", 0) or 0
-                            )
-                            bucket["lines_accepted"] += (
-                                lang.get("total_code_lines_accepted", 0) or 0
-                            )
+                            for lang in model_obj.get("languages", []) or []:
+                                bucket["suggestions"] += (
+                                    lang.get("total_code_suggestions", 0) or 0
+                                )
+                                bucket["acceptances"] += (
+                                    lang.get("total_code_acceptances", 0) or 0
+                                )
+                                bucket["lines_suggested"] += (
+                                    lang.get("total_code_lines_suggested", 0) or 0
+                                )
+                                bucket["lines_accepted"] += (
+                                    lang.get("total_code_lines_accepted", 0) or 0
+                                )
 
             # Get chat from daily_model_metrics.
             chat_rows = conn.execute(
@@ -1530,6 +1599,7 @@ def user_detail(
             for d, vals in sorted(daily.items())
         ],
         "recent_prs": pr_rows[:50],
+        "pr_ingest_enabled": settings.pr_ingest_enabled,
         "ai_credits": premium,
         "per_user_copilot_metrics_available": False,
         "per_user_copilot_note": (
