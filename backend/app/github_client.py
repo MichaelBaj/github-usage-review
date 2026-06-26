@@ -13,7 +13,9 @@ See https://docs.github.com/en/rest/copilot/copilot-usage-metrics for full refer
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -21,7 +23,11 @@ import httpx
 
 from .config import settings
 
+logger = logging.getLogger(__name__)
+
 GITHUB_API = "https://api.github.com"
+_DOWNLOAD_RETRIES = 3
+_DOWNLOAD_BACKOFF = 2.0
 ACCEPT = "application/vnd.github+json"
 API_VERSION = "2022-11-28"
 # Copilot metrics report endpoints require the newer API version.
@@ -123,11 +129,31 @@ class GitHubClient:
 
         Uses a plain client without auth headers — signed Azure blob
         URLs reject any ``Authorization`` header, even an empty one.
+        Retries on transient connection/TLS errors with exponential backoff.
         """
-        async with httpx.AsyncClient(timeout=30.0) as plain:
-            response = await plain.get(download_url)
-        response.raise_for_status()
-        return response.text
+        last_exc: Exception | None = None
+        for attempt in range(1, _DOWNLOAD_RETRIES + 1):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as plain:
+                    response = await plain.get(download_url)
+                response.raise_for_status()
+                return response.text
+            except httpx.ConnectError as exc:
+                last_exc = exc
+                logger.warning(
+                    "Report download attempt %d/%d failed (ConnectError): %s",
+                    attempt,
+                    _DOWNLOAD_RETRIES,
+                    exc,
+                )
+                if attempt < _DOWNLOAD_RETRIES:
+                    await asyncio.sleep(_DOWNLOAD_BACKOFF * attempt)
+        raise httpx.ConnectError(
+            f"Failed to download report after {_DOWNLOAD_RETRIES} attempts. "
+            "This is usually a TLS/network issue inside the container — "
+            "try rebuilding with `docker compose build --no-cache backend` "
+            "to refresh CA certificates."
+        ) from last_exc
 
     async def org_metrics_report(self) -> dict[str, Any]:
         """Return the latest 28-day org metrics report (new API).
@@ -374,6 +400,51 @@ class GitHubClient:
             params["hour"] = hour
         response = await self._get(
             f"/enterprises/{self.enterprise}/settings/billing/usage",
+            params=params or None,
+        )
+        return response.json()
+
+    # ----- AI-credit aggregate usage (headline totals) -----
+
+    async def org_ai_credit_usage(
+        self,
+        year: int | None = None,
+        month: int | None = None,
+    ) -> dict[str, Any]:
+        """Fetch aggregated AI-credit usage for the org.
+
+        Endpoint: ``GET /organizations/{org}/settings/billing/ai_credit/usage``.
+
+        Returns pre-aggregated totals per SKU/model with ``grossQuantity``,
+        ``netQuantity``, ``grossAmount``, ``netAmount``.  Typically fresher
+        than the per-day general usage endpoint for headline numbers.
+        """
+        params: dict[str, Any] = {}
+        if year is not None:
+            params["year"] = year
+        if month is not None:
+            params["month"] = month
+        response = await self._get(
+            f"/organizations/{self.org}/settings/billing/ai_credit/usage",
+            params=params or None,
+        )
+        return response.json()
+
+    async def enterprise_ai_credit_usage(
+        self,
+        year: int | None = None,
+        month: int | None = None,
+    ) -> dict[str, Any]:
+        """Fetch aggregated AI-credit usage at the enterprise scope (fallback)."""
+        if not self.enterprise:
+            raise RuntimeError("github_enterprise is not configured")
+        params: dict[str, Any] = {}
+        if year is not None:
+            params["year"] = year
+        if month is not None:
+            params["month"] = month
+        response = await self._get(
+            f"/enterprises/{self.enterprise}/settings/billing/ai_credit/usage",
             params=params or None,
         )
         return response.json()

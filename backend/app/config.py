@@ -10,7 +10,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Calendar-date versioning (YYYY-MM-DD.build)
-VERSION = "2026-06-26.2"
+VERSION = "2026-06-26.3"
 # Billing data before this date is rejected during import.
 BILLING_MIN_DATE = "2026-06-01"
 

@@ -242,21 +242,27 @@ export function SummaryTab(): JSX.Element {
                 <Kpi
                   label="AI credits"
                   value={
-                    state.modelCreditsTotal !== null
-                      ? fmtNum(state.modelCreditsTotal)
-                      : state.premium
-                        ? fmtNum(state.premium.total_ai_credits)
-                        : "—"
+                    state.premium?.headline_ai_credits != null
+                      ? fmtNum(state.premium.headline_ai_credits)
+                      : state.modelCreditsTotal !== null
+                        ? fmtNum(state.modelCreditsTotal)
+                        : state.premium
+                          ? fmtNum(state.premium.total_ai_credits)
+                          : "—"
                   }
                   sub={
                     state.premium && state.premium.available
-                      ? fmtMoney(state.premium.total_ai_credit_cost_usd)
+                      ? fmtMoney(
+                          state.premium.headline_ai_credit_cost_usd
+                            ?? state.premium.total_ai_credit_cost_usd,
+                        )
                       : "billing API unavailable"
                   }
                   tooltip={
-                    "Total Copilot AI-credit quantity aligned to the Model Usage (Org) " +
-                    "Per-Model Summary total. Sub-value is sum of net_amount_usd for " +
-                    "billable Copilot SKUs from the billing API."
+                    (state.premium?.headline_ai_credits != null
+                      ? "Headline total from GitHub ai_credit/usage aggregate endpoint (freshest). "
+                      : "Total from per-day billing rows. ") +
+                    "Sub-value is net cost (USD) for billable Copilot SKUs."
                   }
                 />
               </div>

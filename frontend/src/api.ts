@@ -438,6 +438,10 @@ export interface AiCreditsSummary {
   available: boolean;
   total_ai_credits: number;
   total_ai_credit_cost_usd: number;
+  headline_ai_credits: number | null;
+  headline_ai_credit_cost_usd: number | null;
+  headline_ai_credit_gross_usd: number | null;
+  headline_fetched_at: string | null;
   skus: AiCreditSku[];
   top_users: AiCreditUser[];
   top_users_per_model?: AiCreditTopUsersPerModel[];

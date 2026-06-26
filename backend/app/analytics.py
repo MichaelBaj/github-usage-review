@@ -2013,6 +2013,20 @@ def ai_credits_summary(
         )
     balanced_users.sort(key=lambda row: row["total_ai_credits"], reverse=True)
 
+    # Headline totals from the ai_credit/usage aggregate endpoint (fresher
+    # than per-day row sums).  Only include when the stored period covers the
+    # query window's month.
+    headline_qty: float | None = None
+    headline_net: float | None = None
+    headline_gross: float | None = None
+    raw_qty = db.get_meta("ai_credit_headline_qty")
+    if raw_qty is not None:
+        headline_qty = float(raw_qty)
+        raw_net = db.get_meta("ai_credit_headline_net_usd")
+        headline_net = float(raw_net) if raw_net else None
+        raw_gross = db.get_meta("ai_credit_headline_gross_usd")
+        headline_gross = float(raw_gross) if raw_gross else None
+
     return {
         "window_start": start_iso,
         "window_end": end_iso,
@@ -2021,6 +2035,10 @@ def ai_credits_summary(
         "total_ai_credit_cost_usd": round(
             float(totals_row["net"] or 0) if totals_row else 0.0, 2
         ),
+        "headline_ai_credits": headline_qty,
+        "headline_ai_credit_cost_usd": round(headline_net, 2) if headline_net is not None else None,
+        "headline_ai_credit_gross_usd": round(headline_gross, 2) if headline_gross is not None else None,
+        "headline_fetched_at": db.get_meta("ai_credit_headline_at"),
         "skus": skus,
         "top_users": top_users,
         "top_users_per_model": top_users_per_model,

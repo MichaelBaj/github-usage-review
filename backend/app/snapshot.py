@@ -527,6 +527,59 @@ async def _ingest_billing_usage(gh: GitHubClient) -> dict[str, Any]:
     return summary
 
 
+async def _ingest_ai_credit_headline(gh: GitHubClient) -> dict[str, Any]:
+    """Fetch aggregated AI-credit totals and persist as DB metadata.
+
+    Uses the ``ai_credit/usage`` endpoint which returns pre-aggregated
+    ``grossQuantity`` / ``netAmount`` per SKU — typically fresher than
+    the per-day general usage endpoint. The headline total is stored in
+    ``meta`` so analytics can prefer it over the sum of per-day rows.
+
+    Non-fatal: returns summary with error key on failure.
+    """
+    summary: dict[str, Any] = {}
+    try:
+        payload = await gh.org_ai_credit_usage()
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404 and gh.enterprise:
+            try:
+                payload = await gh.enterprise_ai_credit_usage()
+            except httpx.HTTPStatusError as exc2:
+                log.warning("enterprise ai_credit/usage failed (%s)", exc2.response.status_code)
+                summary["error"] = str(exc2.response.status_code)
+                return summary
+        elif exc.response.status_code in (403, 404):
+            log.info("ai_credit/usage unavailable (%s); headline totals won't populate.", exc.response.status_code)
+            summary["error"] = str(exc.response.status_code)
+            return summary
+        else:
+            raise
+
+    items = payload.get("usageItems") or []
+    total_qty = sum(float(it.get("grossQuantity") or it.get("netQuantity") or 0) for it in items)
+    total_net = sum(float(it.get("netAmount") or 0) for it in items)
+    total_gross = sum(float(it.get("grossAmount") or 0) for it in items)
+
+    # Persist headline totals as meta — analytics prefers these over row sums.
+    ts = datetime.now(UTC).isoformat()
+    db.set_meta("ai_credit_headline_qty", str(total_qty))
+    db.set_meta("ai_credit_headline_net_usd", str(total_net))
+    db.set_meta("ai_credit_headline_gross_usd", str(total_gross))
+    db.set_meta("ai_credit_headline_at", ts)
+
+    # Store the time period for freshness checks.
+    tp = payload.get("timePeriod") or {}
+    period_label = f"{tp.get('year', '')}-{tp.get('month', ''):02d}" if tp.get("year") else ""
+    if period_label:
+        db.set_meta("ai_credit_headline_period", period_label)
+
+    summary["total_qty"] = total_qty
+    summary["total_net_usd"] = round(total_net, 2)
+    summary["total_gross_usd"] = round(total_gross, 2)
+    summary["items"] = len(items)
+    return summary
+
+
 def _normalize_seat(seat: dict[str, Any]) -> dict[str, Any]:
     """Flatten a seat record into the storage shape."""
     assignee = seat.get("assignee") or {}
@@ -664,6 +717,12 @@ async def run_snapshot() -> dict[str, Any]:
         except Exception:
             log.exception("billing usage ingestion failed")
             summary["billing_usage_error"] = "exception"
+
+        try:
+            summary["ai_credit_headline"] = await _ingest_ai_credit_headline(gh)
+        except Exception:
+            log.exception("ai_credit headline ingestion failed")
+            summary["ai_credit_headline_error"] = "exception"
 
     summary["finished_at"] = datetime.now(UTC).isoformat()
     db.set_meta("last_snapshot_at", summary["finished_at"])
