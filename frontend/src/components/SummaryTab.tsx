@@ -5,6 +5,7 @@ import {
   type AiCreditTopUsersPerModel,
   type Breakdowns,
   type CostWindow,
+  type FeatureBreakdown,
   type Kpis,
   type AiCreditsSummary,
   type ModelBreakdown,
@@ -30,6 +31,7 @@ interface State {
   teams: TeamRow[];
   stale: StaleSeat[];
   breakdowns: Breakdowns | null;
+  features: FeatureBreakdown | null;
   cost: CostWindow | null;
   premium: AiCreditsSummary | null;
   modelCreditsTotal: number | null;
@@ -42,6 +44,7 @@ const initial: State = {
   teams: [],
   stale: [],
   breakdowns: null,
+  features: null,
   cost: null,
   premium: null,
   modelCreditsTotal: null,
@@ -159,11 +162,12 @@ export function SummaryTab(): JSX.Element {
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
       const params = toWindowParams(win);
-      const [kpis, teams, stale, breakdowns, cost, premium, models] = await Promise.all([
+      const [kpis, teams, stale, breakdowns, features, cost, premium, models] = await Promise.all([
         api.kpis(params),
         api.teams(params),
         api.staleSeats(),
         api.breakdowns(params),
+        api.features(params).catch(() => null),
         api.cost(params),
         api.aiCredits(params),
         api.models(params),
@@ -175,6 +179,7 @@ export function SummaryTab(): JSX.Element {
         teams,
         stale,
         breakdowns,
+        features,
         cost,
         premium,
         modelCreditsTotal: modelCreditsGrandTotal(models),
@@ -237,21 +242,27 @@ export function SummaryTab(): JSX.Element {
                 <Kpi
                   label="AI credits"
                   value={
-                    state.modelCreditsTotal !== null
-                      ? fmtNum(state.modelCreditsTotal)
-                      : state.premium
-                        ? fmtNum(state.premium.total_ai_credits)
-                        : "—"
+                    state.premium?.headline_ai_credits != null
+                      ? fmtNum(state.premium.headline_ai_credits)
+                      : state.modelCreditsTotal !== null
+                        ? fmtNum(state.modelCreditsTotal)
+                        : state.premium
+                          ? fmtNum(state.premium.total_ai_credits)
+                          : "—"
                   }
                   sub={
                     state.premium && state.premium.available
-                      ? fmtMoney(state.premium.total_ai_credit_cost_usd)
+                      ? fmtMoney(
+                          state.premium.headline_ai_credit_cost_usd
+                            ?? state.premium.total_ai_credit_cost_usd,
+                        )
                       : "billing API unavailable"
                   }
                   tooltip={
-                    "Total Copilot AI-credit quantity aligned to the Model Usage (Org) " +
-                    "Per-Model Summary total. Sub-value is sum of net_amount_usd for " +
-                    "billable Copilot SKUs from the billing API."
+                    (state.premium?.headline_ai_credits != null
+                      ? "Headline total from GitHub ai_credit/usage aggregate endpoint (freshest). "
+                      : "Total from per-day billing rows. ") +
+                    "Sub-value is net cost (USD) for billable Copilot SKUs."
                   }
                 />
               </div>
@@ -321,7 +332,7 @@ export function SummaryTab(): JSX.Element {
 
           <div className="panel">
             <h2>Breakdowns</h2>
-            {state.breakdowns ? <BreakdownCharts data={state.breakdowns} /> : null}
+            {state.breakdowns ? <BreakdownCharts data={state.breakdowns} features={state.features} /> : null}
           </div>
 
           <div className="row-grid">

@@ -120,6 +120,18 @@ CREATE TABLE IF NOT EXISTS daily_team_language_metrics (
 CREATE INDEX IF NOT EXISTS idx_team_lang_team_date
     ON daily_team_language_metrics(team_slug, date);
 
+CREATE TABLE IF NOT EXISTS daily_feature_metrics (
+    date TEXT NOT NULL,
+    feature TEXT NOT NULL,
+    interactions INTEGER DEFAULT 0,
+    code_generations INTEGER DEFAULT 0,
+    code_acceptances INTEGER DEFAULT 0,
+    loc_suggested INTEGER DEFAULT 0,
+    loc_accepted INTEGER DEFAULT 0,
+    loc_deleted INTEGER DEFAULT 0,
+    PRIMARY KEY (date, feature)
+);
+
 CREATE TABLE IF NOT EXISTS repos (
     name TEXT PRIMARY KEY,
     full_name TEXT NOT NULL,
@@ -421,6 +433,21 @@ def replace_model_rows(
                 {"date": date, "scope": scope, "team_slug": team_slug, **r}
                 for r in rows
             ],
+        )
+
+
+def replace_feature_rows(date: str, rows: Iterable[dict[str, Any]]) -> None:
+    """Replace all feature-breakdown rows for ``date``."""
+    with connect() as conn:
+        conn.execute("DELETE FROM daily_feature_metrics WHERE date = ?", (date,))
+        conn.executemany(
+            """
+            INSERT INTO daily_feature_metrics(date, feature, interactions,
+                code_generations, code_acceptances, loc_suggested, loc_accepted, loc_deleted)
+            VALUES(:date, :feature, :interactions, :code_generations, :code_acceptances,
+                :loc_suggested, :loc_accepted, :loc_deleted)
+            """,
+            [{"date": date, **r} for r in rows],
         )
 
 

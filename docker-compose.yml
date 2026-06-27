@@ -1,23 +1,39 @@
 services:
   backend:
     build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app
     env_file: .env
     environment:
       DB_PATH: /data/copilot.db
       CORS_ALLOW_ORIGINS: '["http://localhost:${FRONTEND_PORT:-8080}"]'
+      WATCHFILES_FORCE_POLLING: "true"
     volumes:
       # Host bind mount: the SQLite DB lives on the host and persists across
       # `docker compose down` / `down -v` / rebuilds. Override DATA_DIR in .env
       # to store it outside the repo (e.g. DATA_DIR=~/copilot-usage-data).
       - ${DATA_DIR:-./data}:/data
+      # Source bind mount enables hot-reload in the backend container.
+      - ./backend/app:/app/app
+      - ./backend/scripts:/app/scripts
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      target: build
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+    environment:
+      VITE_API_TARGET: http://backend:8000
     depends_on:
       - backend
+    volumes:
+      # Source bind mounts let Vite rebuild when frontend code changes.
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./frontend/tsconfig.json:/app/tsconfig.json
     ports:
-      - "${FRONTEND_PORT:-8080}:80"
+      - "${FRONTEND_PORT:-8080}:5173"
     restart: unless-stopped

@@ -494,3 +494,32 @@ button:disabled {
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* Snapshot progress bar */
+.snapshot-progress {
+  height: 3px;
+  width: 100%;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.snapshot-progress-bar {
+  height: 100%;
+  width: 30%;
+  background: var(--accent);
+  border-radius: 2px;
+  animation: progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(433%); }
+}
+
+/* Success button flash */
+.btn-success {
+  background: var(--good);
+  transition: background 0.3s ease;
+}

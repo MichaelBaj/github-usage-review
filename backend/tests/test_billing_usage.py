@@ -448,3 +448,82 @@ def test_ai_credits_summary_deduplicates_overlapping_sources() -> None:
     # Per-user should also be deduped
     assert len(out["top_users"]) == 1
     assert out["top_users"][0]["ai_credits"] == pytest.approx(100.0)
+
+
+# ---------------------------------------------------------------------------
+# Headline AI-credit aggregate (ai_credit/usage endpoint)
+# ---------------------------------------------------------------------------
+
+
+def test_ai_credits_summary_includes_headline_from_meta(billing_db: None) -> None:
+    """When headline meta keys are set, ai_credits_summary exposes them."""
+    db.set_meta("ai_credit_headline_qty", "806917.98")
+    db.set_meta("ai_credit_headline_net_usd", "1234.98")
+    db.set_meta("ai_credit_headline_gross_usd", "8069.18")
+    db.set_meta("ai_credit_headline_at", "2026-06-26T12:00:00+00:00")
+
+    out = analytics.ai_credits_summary(start="2026-06-01", end="2026-06-02")
+
+    assert out["headline_ai_credits"] == pytest.approx(806917.98)
+    assert out["headline_ai_credit_cost_usd"] == pytest.approx(1234.98)
+    assert out["headline_ai_credit_gross_usd"] == pytest.approx(8069.18)
+    assert out["headline_fetched_at"] == "2026-06-26T12:00:00+00:00"
+    # Row-level totals still present alongside headline.
+    assert out["total_ai_credits"] == pytest.approx(25.0)
+
+
+def test_ai_credits_summary_headline_null_when_no_meta(billing_db: None) -> None:
+    """Without headline meta, fields are None (frontend falls back to row totals)."""
+    out = analytics.ai_credits_summary(start="2026-06-01", end="2026-06-02")
+
+    assert out["headline_ai_credits"] is None
+    assert out["headline_ai_credit_cost_usd"] is None
+    assert out["headline_fetched_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_ingest_ai_credit_headline_stores_meta() -> None:
+    """_ingest_ai_credit_headline persists aggregate totals in DB meta."""
+    from unittest.mock import AsyncMock
+
+    from app.snapshot import _ingest_ai_credit_headline
+
+    db.init_db()
+
+    fake_gh = AsyncMock()
+    fake_gh.org_ai_credit_usage.return_value = {
+        "timePeriod": {"year": 2026, "month": 6},
+        "usageItems": [
+            {
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "model": "gpt-4o",
+                "grossQuantity": 500000.0,
+                "grossAmount": 5000.0,
+                "netQuantity": 500000.0,
+                "netAmount": 750.0,
+            },
+            {
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "model": "claude-sonnet-4",
+                "grossQuantity": 306917.98,
+                "grossAmount": 3069.18,
+                "netQuantity": 306917.98,
+                "netAmount": 484.98,
+            },
+        ],
+    }
+
+    summary = await _ingest_ai_credit_headline(fake_gh)
+
+    assert summary["total_qty"] == pytest.approx(806917.98)
+    assert summary["total_net_usd"] == pytest.approx(1234.98)
+    assert summary["total_gross_usd"] == pytest.approx(8069.18)
+    assert summary["items"] == 2
+
+    # Verify meta was stored.
+    assert float(db.get_meta("ai_credit_headline_qty")) == pytest.approx(806917.98)
+    assert float(db.get_meta("ai_credit_headline_net_usd")) == pytest.approx(1234.98)
+    assert db.get_meta("ai_credit_headline_period") == "2026-06"
+    assert db.get_meta("ai_credit_headline_at") is not None

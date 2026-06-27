@@ -152,3 +152,55 @@ def test_normalize_seat_extracts_assignee_login() -> None:
     assert normalized["assigning_team"] == "Platform"
     assert normalized["last_activity_editor"] == "vscode"
     assert "raw_json" in normalized
+
+
+def test_ingest_pr_activity_does_not_skip_repos_on_first_run() -> None:
+    """Repos must not be skipped on the first PR ingestion run.
+
+    Regression: replace_repos was called BEFORE the PR-fetching loop,
+    causing get_repo_last_fetched to return the just-stored pushed_at.
+    The skip-unchanged check then considered every repo already scanned.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from app import db
+    from app.snapshot import _ingest_pr_activity
+
+    db.init_db()
+
+    fake_repos = [
+        {"name": "repo-a", "full_name": "org/repo-a", "pushed_at": "2026-06-25T10:00:00Z",
+         "archived": False, "fork": False, "default_branch": "main"},
+    ]
+    fake_pr = {
+        "number": 42, "state": "open", "title": "test PR",
+        "user": {"login": "alice"},
+        "created_at": "2026-06-24T12:00:00Z", "merged_at": None, "closed_at": None,
+        "comments": 0, "review_comments": 0,
+        "base": {"ref": "main"}, "head": {"ref": "feat"},
+    }
+
+    gh = MagicMock()
+    gh.list_org_repos = AsyncMock(return_value=fake_repos)
+    gh.get_pull_request = AsyncMock(return_value={
+        "additions": 10, "deletions": 3, "changed_files": 2, "commits": 1,
+        "comments": 0, "review_comments": 0,
+    })
+
+    async def _fake_pulls(repo, state="all", since_iso=None):
+        yield fake_pr
+
+    gh.list_repo_pulls = _fake_pulls
+
+    since = "2026-06-01T00:00:00+00:00"
+    summary = asyncio.run(
+        _ingest_pr_activity(gh, since)
+    )
+
+    assert summary["repos_scanned"] >= 1, f"Expected repos scanned >= 1, got {summary}"
+    assert summary["prs_upserted"] >= 1, f"Expected PRs upserted >= 1, got {summary}"
+
+    with db.connect() as conn:
+        pr_count = conn.execute("SELECT count(*) FROM pull_requests").fetchone()[0]
+    assert pr_count >= 1, "PR should be stored in DB"

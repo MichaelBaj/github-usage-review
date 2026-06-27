@@ -330,7 +330,9 @@ function UserDetailView({ detail }: { detail: UserDetail }): JSX.Element {
             {detail.recent_prs.length === 0 ? (
               <tr>
                 <td colSpan={8} className="muted">
-                  No PRs in this window.
+                  {detail.pr_ingest_enabled
+                    ? "No PRs in this window."
+                    : "PR ingestion is disabled. Set PR_INGEST_ENABLED=true and ensure your GitHub token has the repo scope, then re-run the snapshot."}
                 </td>
               </tr>
             ) : (
@@ -371,7 +373,9 @@ function UserDetailView({ detail }: { detail: UserDetail }): JSX.Element {
             {detail.daily.length === 0 ? (
               <tr>
                 <td colSpan={5} className="muted">
-                  No activity recorded.
+                  {detail.pr_ingest_enabled
+                    ? "No activity recorded."
+                    : "PR ingestion is disabled. Set PR_INGEST_ENABLED=true and ensure your GitHub token has the repo scope, then re-run the snapshot."}
                 </td>
               </tr>
             ) : (

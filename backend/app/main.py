@@ -194,6 +194,16 @@ def get_chat_vs_inline(
     return analytics.chat_vs_inline(days=days, start=start, end=end, team=team)
 
 
+@app.get("/api/features")
+def get_features(
+    days: int = 30,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict[str, Any]:
+    """Return per-feature usage breakdown (agent mode, completions, CLI, etc.)."""
+    return analytics.feature_breakdown(days=days, start=start, end=end)
+
+
 @app.get("/api/cost")
 def get_cost(
     days: int | None = None,
