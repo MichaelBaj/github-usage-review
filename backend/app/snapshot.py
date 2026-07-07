@@ -466,9 +466,15 @@ def _flatten_billing_usage(payload: dict[str, Any]) -> list[dict[str, Any]]:
         ]}
 
     Missing fields default safely so the storage row is always complete.
+
+    When the API returns multiple timestamped entries for the same
+    (date, login, sku, repository_name) — which happens when date+time is
+    truncated to date-only — the rows are pre-aggregated (summed) so that
+    the upsert into ``billing_usage`` doesn't discard earlier entries.
     """
     items = payload.get("usageItems") or []
-    out: list[dict[str, Any]] = []
+    # First pass: flatten into raw rows.
+    raw: list[dict[str, Any]] = []
     for it in items:
         raw_date = it.get("date") or it.get("usageAt") or ""
         date = raw_date[:10] if isinstance(raw_date, str) else ""
@@ -476,7 +482,7 @@ def _flatten_billing_usage(payload: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         if date < BILLING_MIN_DATE:
             continue
-        out.append(
+        raw.append(
             {
                 "date": date,
                 "login": (it.get("username") or "").lower(),
@@ -490,38 +496,72 @@ def _flatten_billing_usage(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "repository_name": it.get("repositoryName") or "",
             }
         )
-    return out
+    # Second pass: merge rows sharing the same DB unique key by summing amounts.
+    merged: dict[tuple[str, ...], dict[str, Any]] = {}
+    for row in raw:
+        key = (row["date"], row["login"], row["sku"], row["repository_name"])
+        if key in merged:
+            merged[key]["quantity"] += row["quantity"]
+            merged[key]["gross_amount_usd"] += row["gross_amount_usd"]
+            merged[key]["discount_amount_usd"] += row["discount_amount_usd"]
+            merged[key]["net_amount_usd"] += row["net_amount_usd"]
+        else:
+            merged[key] = dict(row)
+    return list(merged.values())
 
 
 async def _ingest_billing_usage(gh: GitHubClient) -> dict[str, Any]:
     """Fetch enhanced billing usage; persist Copilot-related rows.
 
+    Fetches daily-granularity data for the **current calendar month** by
+    passing ``year``/``month`` parameters — without them the API only
+    returns monthly aggregates dated the 1st.
+
+    Previous-month data is expected to come from CSV imports (which provide
+    richer per-user/per-model detail). The API's historical month endpoint
+    is also prohibitively slow for orgs with many users.
+
     Falls back from org → enterprise scope on 404. Non-fatal on 403/404
     (older tiers / disabled plans).
     """
     summary: dict[str, Any] = {"rows": 0}
+    now = datetime.now(UTC)
+    year, month = now.year, now.month
+
     try:
-        payload = await gh.org_billing_usage()
+        payload = await asyncio.wait_for(
+            gh.org_billing_usage(year=year, month=month),
+            timeout=60.0,
+        )
+    except asyncio.TimeoutError:
+        log.warning("org billing usage timed out for %d-%02d", year, month)
+        summary["error"] = "timeout"
+        return summary
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 404 and gh.enterprise:
             try:
-                payload = await gh.enterprise_billing_usage()
-            except httpx.HTTPStatusError as exc2:
-                log.warning("enterprise billing usage failed (%s)", exc2.response.status_code)
-                summary["error"] = str(exc2.response.status_code)
+                payload = await asyncio.wait_for(
+                    gh.enterprise_billing_usage(year=year, month=month),
+                    timeout=60.0,
+                )
+            except (httpx.HTTPStatusError, asyncio.TimeoutError) as exc2:
+                log.warning("enterprise billing usage failed for %d-%02d: %s", year, month, exc2)
+                summary["error"] = str(exc2)
                 return summary
-        else:
+        elif exc.response.status_code in (403, 404):
             log.warning(
-                "org billing usage failed (%s); enhanced billing API may be "
-                "unavailable on this org tier. AI-credit metrics will "
-                "not populate.",
-                exc.response.status_code,
+                "org billing usage failed (%s) for %d-%02d; enhanced billing API may be "
+                "unavailable on this org tier.",
+                exc.response.status_code, year, month,
             )
             summary["error"] = str(exc.response.status_code)
             return summary
+        else:
+            raise
 
     rows = _flatten_billing_usage(payload)
-    db.upsert_billing_usage(rows)
+    if rows:
+        db.upsert_billing_usage(rows)
     summary["rows"] = len(rows)
     summary["copilot_rows"] = sum(1 for r in rows if "copilot" in (r["product"] or "").lower())
     return summary

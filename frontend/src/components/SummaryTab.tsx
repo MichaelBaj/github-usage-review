@@ -3,6 +3,7 @@ import {
   api,
   type AiCreditBalancedUser,
   type AiCreditTopUsersPerModel,
+  type AiCreditsProjection,
   type Breakdowns,
   type CostWindow,
   type FeatureBreakdown,
@@ -35,6 +36,7 @@ interface State {
   cost: CostWindow | null;
   premium: AiCreditsSummary | null;
   modelCreditsTotal: number | null;
+  creditProjection: AiCreditsProjection | null;
 }
 
 const initial: State = {
@@ -48,6 +50,7 @@ const initial: State = {
   cost: null,
   premium: null,
   modelCreditsTotal: null,
+  creditProjection: null,
 };
 
 function modelCreditsGrandTotal(data: ModelBreakdown): number {
@@ -162,7 +165,7 @@ export function SummaryTab(): JSX.Element {
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
       const params = toWindowParams(win);
-      const [kpis, teams, stale, breakdowns, features, cost, premium, models] = await Promise.all([
+      const [kpis, teams, stale, breakdowns, features, cost, premium, models, creditProjection] = await Promise.all([
         api.kpis(params),
         api.teams(params),
         api.staleSeats(),
@@ -171,6 +174,7 @@ export function SummaryTab(): JSX.Element {
         api.cost(params),
         api.aiCredits(params),
         api.models(params),
+        api.aiCreditsProjection().catch(() => null),
       ]);
       setState({
         loading: false,
@@ -183,6 +187,7 @@ export function SummaryTab(): JSX.Element {
         cost,
         premium,
         modelCreditsTotal: modelCreditsGrandTotal(models),
+        creditProjection,
       });
     } catch (e) {
       setState((s) => ({ ...s, loading: false, error: (e as Error).message }));
@@ -332,7 +337,7 @@ export function SummaryTab(): JSX.Element {
 
           <div className="panel">
             <h2>Breakdowns</h2>
-            {state.breakdowns ? <BreakdownCharts data={state.breakdowns} features={state.features} /> : null}
+            {state.breakdowns ? <BreakdownCharts data={state.breakdowns} features={state.features} creditProjection={state.creditProjection} /> : null}
           </div>
 
           <div className="row-grid">

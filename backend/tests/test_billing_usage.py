@@ -527,3 +527,136 @@ async def test_ingest_ai_credit_headline_stores_meta() -> None:
     assert float(db.get_meta("ai_credit_headline_net_usd")) == pytest.approx(1234.98)
     assert db.get_meta("ai_credit_headline_period") == "2026-06"
     assert db.get_meta("ai_credit_headline_at") is not None
+
+
+# ---------------------------------------------------------------------------
+# daily_org_ai_credits — projection chart data
+# ---------------------------------------------------------------------------
+
+def _seed_two_months(cur_date: str, prev_date: str) -> None:
+    """Seed billing_usage with one row per day for two calendar months."""
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": cur_date,
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 10,
+                "net_amount_usd": 0.40,
+                "model": "claude-sonnet",
+            },
+            {
+                "date": prev_date,
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 7,
+                "net_amount_usd": 0.28,
+                "model": "claude-sonnet",
+            },
+        ]
+    )
+
+
+def test_daily_org_ai_credits_returns_correct_month_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Month labels match the calendar months relative to the mocked today."""
+    from datetime import date as date_cls
+    monkeypatch.setattr(analytics, "_today", lambda: date_cls(2026, 7, 7))
+    _seed_two_months("2026-07-03", "2026-06-15")
+
+    out = analytics.daily_org_ai_credits()
+
+    assert out["current_month_label"] == "Jul 2026"
+    assert out["previous_month_label"] == "Jun 2026"
+
+
+def test_daily_org_ai_credits_cumulative_running_total(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cumulative series increases monotonically and matches raw daily totals."""
+    from datetime import date as date_cls
+    monkeypatch.setattr(analytics, "_today", lambda: date_cls(2026, 7, 7))
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-07-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 5,
+                "net_amount_usd": 0.20,
+                "model": "claude-sonnet",
+            },
+            {
+                "date": "2026-07-03",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 10,
+                "net_amount_usd": 0.40,
+                "model": "claude-sonnet",
+            },
+        ]
+    )
+
+    out = analytics.daily_org_ai_credits()
+    cur = out["current_month"]
+
+    # Must have entries up to day 3 (the last day with data)
+    assert len(cur) == 3
+    assert cur[0] == {"day": 1, "cumulative": pytest.approx(5.0)}
+    assert cur[1] == {"day": 2, "cumulative": pytest.approx(5.0)}   # no data → unchanged
+    assert cur[2] == {"day": 3, "cumulative": pytest.approx(15.0)}
+
+    # Each step must be non-decreasing
+    for i in range(1, len(cur)):
+        assert cur[i]["cumulative"] >= cur[i - 1]["cumulative"]
+
+
+def test_daily_org_ai_credits_empty_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no billing data both series are empty; labels are still set."""
+    from datetime import date as date_cls
+    monkeypatch.setattr(analytics, "_today", lambda: date_cls(2026, 7, 7))
+    db.init_db()
+
+    out = analytics.daily_org_ai_credits()
+
+    assert out["current_month"] == []
+    assert out["previous_month"] == []
+    assert out["current_month_label"] == "Jul 2026"
+    assert out["previous_month_label"] == "Jun 2026"
+
+
+def test_daily_org_ai_credits_excludes_non_billable_skus(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-billable SKUs (e.g. enterprise seats) are excluded from credit totals."""
+    from datetime import date as date_cls
+    monkeypatch.setattr(analytics, "_today", lambda: date_cls(2026, 7, 7))
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-07-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 20,
+                "net_amount_usd": 0.80,
+                "model": "claude-sonnet",
+            },
+            {
+                "date": "2026-07-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_enterprise",       # non-billable seat SKU
+                "quantity": 900,
+                "net_amount_usd": 9.00,
+                "model": "",
+            },
+        ]
+    )
+
+    out = analytics.daily_org_ai_credits()
+
+    assert len(out["current_month"]) == 1
+    assert out["current_month"][0]["cumulative"] == pytest.approx(20.0)

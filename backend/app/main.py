@@ -284,6 +284,16 @@ def get_ai_credits_team(
     return analytics.ai_credits_for_team(team_slug, days=days, start=start, end=end)
 
 
+@app.get("/api/ai-credits/projection")
+def get_ai_credits_projection() -> dict[str, Any]:
+    """Return daily cumulative AI-credit usage for the current and previous calendar months.
+
+    Used by the Summary page projection chart to visualise month-over-month
+    consumption trends and aid budget forecasting.
+    """
+    return analytics.daily_org_ai_credits()
+
+
 @app.get("/api/roi")
 def get_roi(
     days: int | None = None,

@@ -483,6 +483,18 @@ export interface AiCreditsTeam {
   tokens_note: string;
 }
 
+export interface AiCreditsProjectionPoint {
+  day: number;
+  cumulative: number;
+}
+
+export interface AiCreditsProjection {
+  current_month: AiCreditsProjectionPoint[];
+  previous_month: AiCreditsProjectionPoint[];
+  current_month_label: string;
+  previous_month_label: string;
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const r = await fetch(path);
   if (!r.ok) throw new Error(`${path}: ${r.status} ${r.statusText}`);
@@ -518,6 +530,8 @@ export const api = {
     getJson<AiCreditsUser>(`/api/ai-credits/users/${encodeURIComponent(login)}${qs(p)}`),
   aiCreditsTeam: (slug: string, p: WindowParams = { days: 30 }) =>
     getJson<AiCreditsTeam>(`/api/ai-credits/teams/${encodeURIComponent(slug)}${qs(p)}`),
+  aiCreditsProjection: () =>
+    getJson<AiCreditsProjection>("/api/ai-credits/projection"),
   projections: () => getJson<Projections>("/api/projections"),
   runSnapshot: async (): Promise<unknown> => {
     const r = await fetch("/api/snapshot/run", { method: "POST" });

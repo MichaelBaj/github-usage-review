@@ -2184,3 +2184,77 @@ def ai_credits_for_team(
         "tokens_available": False,
         "tokens_note": TOKENS_NOTE,
     }
+
+
+def daily_org_ai_credits() -> dict[str, Any]:
+    """Return daily cumulative AI-credit consumption for the current and previous calendar months.
+
+    Used by the projection chart on the Summary page to visualise whether
+    consumption is trending above or below the previous month's baseline.
+
+    Returns a dict with:
+        current_month      – list of {day, cumulative} for the current calendar month
+        previous_month     – list of {day, cumulative} for the previous calendar month
+        current_month_label  – human-readable label, e.g. "Jul 2026"
+        previous_month_label – human-readable label, e.g. "Jun 2026"
+    """
+    today = _today()
+    # Current calendar month: 1st → today
+    cur_start = date_cls(today.year, today.month, 1)
+    cur_end = today
+
+    # Previous calendar month: 1st → last day of that month
+    first_of_cur = cur_start
+    prev_end = first_of_cur - timedelta(days=1)
+    prev_start = date_cls(prev_end.year, prev_end.month, 1)
+
+    cur_start_iso = cur_start.isoformat()
+    cur_end_iso = cur_end.isoformat()
+    prev_start_iso = prev_start.isoformat()
+    prev_end_iso = prev_end.isoformat()
+
+    def _fetch_daily(start_iso: str, end_iso: str) -> list[tuple[str, float]]:
+        with db.connect() as conn:
+            dedup = _billing_dedup_sql(conn, start_iso, end_iso)
+            rows = conn.execute(
+                "SELECT date, SUM(quantity) AS qty "
+                "FROM billing_usage WHERE date BETWEEN ? AND ? "
+                f"{_BILLING_MIN_DATE_SQL} "
+                "AND lower(product) LIKE '%copilot%' "
+                f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+                f"{dedup} "
+                "GROUP BY date ORDER BY date",
+                (start_iso, end_iso),
+            ).fetchall()
+        return [(r["date"], float(r["qty"] or 0)) for r in rows]
+
+    def _to_cumulative(rows: list[tuple[str, float]], month_start: date_cls) -> list[dict[str, Any]]:
+        """Convert raw daily rows to cumulative day-of-month series."""
+        daily: dict[int, float] = {}
+        for date_str, qty in rows:
+            d = _parse_date(date_str)
+            if d is None:
+                continue
+            day_num = d.day
+            daily[day_num] = daily.get(day_num, 0.0) + qty
+        result = []
+        running = 0.0
+        # Iterate over every day from 1 to the last day present (or today's day for current)
+        max_day = max(daily.keys()) if daily else 0
+        for day_num in range(1, max_day + 1):
+            running += daily.get(day_num, 0.0)
+            result.append({"day": day_num, "cumulative": round(running, 2)})
+        return result
+
+    cur_rows = _fetch_daily(cur_start_iso, cur_end_iso)
+    prev_rows = _fetch_daily(prev_start_iso, prev_end_iso)
+
+    cur_label = cur_start.strftime("%b %Y")
+    prev_label = prev_start.strftime("%b %Y")
+
+    return {
+        "current_month": _to_cumulative(cur_rows, cur_start),
+        "previous_month": _to_cumulative(prev_rows, prev_start),
+        "current_month_label": cur_label,
+        "previous_month_label": prev_label,
+    }

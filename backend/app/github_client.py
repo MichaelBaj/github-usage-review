@@ -350,7 +350,7 @@ class GitHubClient:
         day: int | None = None,
         hour: int | None = None,
     ) -> dict[str, Any]:
-        """Fetch enhanced billing usage for the org.
+        """Fetch enhanced billing usage for the org (all pages).
 
         Endpoint: ``GET /organizations/{org}/settings/billing/usage``.
 
@@ -360,11 +360,13 @@ class GitHubClient:
         and (where attributable) ``username`` — which is how we surface
         Copilot AI-credit usage per user.
 
+        Paginates automatically until all usage items are collected.
+
         Requires a token with the ``read:enterprise`` or
         ``Plan: Read`` (admin:org for legacy) permission. Some org tiers
         return 403 — caller should handle gracefully.
         """
-        params: dict[str, Any] = {}
+        params: dict[str, Any] = {"per_page": 100}
         if year is not None:
             params["year"] = year
         if month is not None:
@@ -373,11 +375,21 @@ class GitHubClient:
             params["day"] = day
         if hour is not None:
             params["hour"] = hour
-        response = await self._get(
-            f"/organizations/{self.org}/settings/billing/usage",
-            params=params or None,
-        )
-        return response.json()
+        all_items: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            params["page"] = page
+            response = await self._get(
+                f"/organizations/{self.org}/settings/billing/usage",
+                params=params,
+            )
+            data = response.json()
+            items = data.get("usageItems") or []
+            all_items.extend(items)
+            if len(items) < 100:
+                break
+            page += 1
+        return {"usageItems": all_items}
 
     async def enterprise_billing_usage(
         self,
@@ -386,10 +398,13 @@ class GitHubClient:
         day: int | None = None,
         hour: int | None = None,
     ) -> dict[str, Any]:
-        """Fetch enhanced billing usage at the enterprise scope (fallback)."""
+        """Fetch enhanced billing usage at the enterprise scope (fallback).
+
+        Paginates automatically until all usage items are collected.
+        """
         if not self.enterprise:
             raise RuntimeError("github_enterprise is not configured")
-        params: dict[str, Any] = {}
+        params: dict[str, Any] = {"per_page": 100}
         if year is not None:
             params["year"] = year
         if month is not None:
@@ -398,11 +413,21 @@ class GitHubClient:
             params["day"] = day
         if hour is not None:
             params["hour"] = hour
-        response = await self._get(
-            f"/enterprises/{self.enterprise}/settings/billing/usage",
-            params=params or None,
-        )
-        return response.json()
+        all_items: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            params["page"] = page
+            response = await self._get(
+                f"/enterprises/{self.enterprise}/settings/billing/usage",
+                params=params,
+            )
+            data = response.json()
+            items = data.get("usageItems") or []
+            all_items.extend(items)
+            if len(items) < 100:
+                break
+            page += 1
+        return {"usageItems": all_items}
 
     # ----- AI-credit aggregate usage (headline totals) -----
 
