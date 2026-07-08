@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type CodeEditorRow, type ModelBreakdown, type TeamDetail, type TeamRow } from "../api";
-import { defaultWindowThisMonth, DateRangeSelector, toWindowParams, type WindowState } from "./DateRangeSelector";
+import { DateRangeSelector, toWindowParams, type WindowState } from "./DateRangeSelector";
 import {
   BarChart,
   Bar,
@@ -15,8 +15,7 @@ type TeamSortCol = "team" | "members_total" | "active_members" | "ai_credits";
 type SortDir = "asc" | "desc";
 
 /** Renders the per-team tab: team list on the left, detail on the right. */
-export function TeamsTab(): JSX.Element {
-  const [win, setWin] = useState<WindowState>(defaultWindowThisMonth());
+export function TeamsTab({ win, onWinChange }: { win: WindowState; onWinChange: (w: WindowState) => void }): JSX.Element {
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<TeamDetail | null>(null);
@@ -71,7 +70,7 @@ export function TeamsTab(): JSX.Element {
 
   return (
     <div>
-      <DateRangeSelector value={win} onChange={setWin} />
+      <DateRangeSelector value={win} onChange={onWinChange} />
       {error ? <div className="error">{error}</div> : null}
       <div className="split">
         <div style={{ minWidth: 320, display: "flex", flexDirection: "column", gap: 16 }}>

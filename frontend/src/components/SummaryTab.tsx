@@ -18,7 +18,6 @@ import { TeamLeaderboard } from "./TeamLeaderboard";
 import { StaleSeats } from "./StaleSeats";
 import { BreakdownCharts } from "./BreakdownCharts";
 import {
-  defaultWindowThisMonth,
   DateRangeSelector,
   toWindowParams,
   type WindowState,
@@ -157,8 +156,7 @@ function BalancedUsersTable({ users }: { users: AiCreditBalancedUser[] }): JSX.E
   );
 }
 
-export function SummaryTab(): JSX.Element {
-  const [win, setWin] = useState<WindowState>(defaultWindowThisMonth());
+export function SummaryTab({ win, onWinChange }: { win: WindowState; onWinChange: (w: WindowState) => void }): JSX.Element {
   const [state, setState] = useState<State>(initial);
 
   async function load(): Promise<void> {
@@ -200,7 +198,7 @@ export function SummaryTab(): JSX.Element {
 
   return (
     <div>
-      <DateRangeSelector value={win} onChange={setWin} />
+      <DateRangeSelector value={win} onChange={onWinChange} />
       {state.error ? <div className="error">{state.error}</div> : null}
       {state.loading || !state.kpis ? (
         <div className="loading">Loading summary…</div>

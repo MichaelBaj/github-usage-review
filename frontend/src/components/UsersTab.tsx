@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type UserDetail, type UserRow } from "../api";
-import { defaultWindowThisMonth, DateRangeSelector, toWindowParams, type WindowState } from "./DateRangeSelector";
+import { DateRangeSelector, toWindowParams, type WindowState } from "./DateRangeSelector";
 import { fmtMoney, fmtNum, Kpi } from "./TeamsTab";
 import {
   BarChart,
@@ -18,8 +18,7 @@ type StatusFilter = "all" | "active" | "stale" | "never_used";
 type SortCol = "login" | "status" | "prs" | "net_lines" | "ai_credits";
 type SortDir = "asc" | "desc";
 
-export function UsersTab(): JSX.Element {
-  const [win, setWin] = useState<WindowState>(defaultWindowThisMonth());
+export function UsersTab({ win, onWinChange }: { win: WindowState; onWinChange: (w: WindowState) => void }): JSX.Element {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [query, setQuery] = useState("");
@@ -85,7 +84,7 @@ export function UsersTab(): JSX.Element {
 
   return (
     <div>
-      <DateRangeSelector value={win} onChange={setWin} />
+      <DateRangeSelector value={win} onChange={onWinChange} />
       <div className="panel">
         <div className="muted" style={{ marginBottom: 8 }}>
           <strong>Note:</strong> GitHub does not expose per-user Copilot acceptance/model/language metrics.
@@ -117,7 +116,7 @@ export function UsersTab(): JSX.Element {
       {error ? <div className="error">{error}</div> : null}
 
       <div className="split">
-        <div className="panel" style={{ minWidth: 340 }}>
+        <div className="panel" style={{ width: 560, flex: "0 0 auto", overflowX: "auto" }}>
           <table>
             <thead>
               <tr>
@@ -151,7 +150,7 @@ export function UsersTab(): JSX.Element {
             </tbody>
           </table>
         </div>
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           {detail ? <UserDetailView detail={detail} /> : <div className="loading">Loading…</div>}
         </div>
       </div>

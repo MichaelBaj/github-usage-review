@@ -1,15 +1,13 @@
 import { useEffect, useState } from "react";
 import { api, type QualitySummary } from "../api";
 import {
-  defaultWindowThisMonth,
   DateRangeSelector,
   toWindowParams,
   type WindowState,
 } from "./DateRangeSelector";
 import { fmtNum, fmtPct, Kpi, ModelSummaryTable, CodeEditorTable, PrCorrelationTable, fmtMoney } from "./TeamsTab";
 
-export function QualityTab(): JSX.Element {
-  const [win, setWin] = useState<WindowState>(defaultWindowThisMonth());
+export function QualityTab({ win, onWinChange }: { win: WindowState; onWinChange: (w: WindowState) => void }): JSX.Element {
   const [data, setData] = useState<QualitySummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,7 +28,7 @@ export function QualityTab(): JSX.Element {
 
   return (
     <div>
-      <DateRangeSelector value={win} onChange={setWin} />
+      <DateRangeSelector value={win} onChange={onWinChange} />
 
       <div className="panel">
         <h2>Chat vs Inline (Org)</h2>

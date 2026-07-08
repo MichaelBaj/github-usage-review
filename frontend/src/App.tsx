@@ -4,6 +4,7 @@ import { SummaryTab } from "./components/SummaryTab";
 import { TeamsTab } from "./components/TeamsTab";
 import { UsersTab } from "./components/UsersTab";
 import { QualityTab } from "./components/QualityTab";
+import { defaultWindowThisMonth, type WindowState } from "./components/DateRangeSelector";
 // Calendar-date versioning (YYYY-MM-DD.build)
 const VERSION = "2026-07-08.4";
 
@@ -24,6 +25,7 @@ function tabFromHash(): Tab {
 
 export function App(): JSX.Element {
   const [tab, setTab] = useState<Tab>(tabFromHash());
+  const [win, setWin] = useState<WindowState>(defaultWindowThisMonth());
   const [refreshing, setRefreshing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -223,10 +225,10 @@ export function App(): JSX.Element {
         </div>
       ) : null}
 
-      {tab === "summary" ? <SummaryTab key={`summary-${dataVersion}`} /> : null}
-      {tab === "teams" ? <TeamsTab key={`teams-${dataVersion}`} /> : null}
-      {tab === "users" ? <UsersTab key={`users-${dataVersion}`} /> : null}
-      {tab === "quality" ? <QualityTab key={`quality-${dataVersion}`} /> : null}
+      {tab === "summary" ? <SummaryTab key={`summary-${dataVersion}`} win={win} onWinChange={setWin} /> : null}
+      {tab === "teams" ? <TeamsTab key={`teams-${dataVersion}`} win={win} onWinChange={setWin} /> : null}
+      {tab === "users" ? <UsersTab key={`users-${dataVersion}`} win={win} onWinChange={setWin} /> : null}
+      {tab === "quality" ? <QualityTab key={`quality-${dataVersion}`} win={win} onWinChange={setWin} /> : null}
 
       {pendingDbFile ? (
         <div className="modal-overlay" onClick={() => setPendingDbFile(null)}>
