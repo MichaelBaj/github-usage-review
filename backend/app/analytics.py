@@ -279,6 +279,7 @@ def _team_member_rollup(
     end_dt = f"{end_iso}T23:59:59+00:00"
     member_set = {m for m in members if m}
     lower_map = {m.lower(): m for m in member_set}
+    credit_start_iso, credit_end_iso = _credit_window_with_login_fallback(start_iso, end_iso)
 
     seat_by_login: dict[str, dict[str, Any]] = {}
     pr_by_login: dict[str, dict[str, int]] = {}
@@ -314,26 +315,26 @@ def _team_member_rollup(
                     "deletions": row["dels"] or 0,
                 }
             for row in conn.execute(
-                f"SELECT login, SUM(quantity) AS qty FROM billing_usage "
+                f"SELECT lower(login) AS login, SUM(quantity) AS qty FROM billing_usage "
                 f"WHERE date BETWEEN ? AND ? AND lower(product) LIKE '%copilot%' "
                 f"{_BILLING_MIN_DATE_SQL} "
                 f"AND {_COPILOT_BILLABLE_SKU_SQL} "
-                f"{_billing_dedup_sql(conn, start_iso, end_iso)} "
-                f"AND lower(login) IN ({lower_placeholders}) GROUP BY login",
-                (start_iso, end_iso, *ordered_lower),
+                f"{_billing_dedup_sql(conn, credit_start_iso, credit_end_iso)} "
+                f"AND lower(login) IN ({lower_placeholders}) GROUP BY lower(login)",
+                (credit_start_iso, credit_end_iso, *ordered_lower),
             ).fetchall():
-                canonical = lower_map.get((row["login"] or "").lower(), row["login"])
+                canonical = lower_map.get(row["login"] or "", row["login"])
                 premium_by_login[canonical] = float(row["qty"] or 0)
             for row in conn.execute(
-                f"SELECT login, SUM(net_amount_usd) AS net FROM billing_usage "
+                f"SELECT lower(login) AS login, SUM(net_amount_usd) AS net FROM billing_usage "
                 f"WHERE date BETWEEN ? AND ? AND lower(product) LIKE '%copilot%' "
                 f"{_BILLING_MIN_DATE_SQL} "
                 f"AND {_COPILOT_BILLABLE_SKU_SQL} "
-                f"{_billing_dedup_sql(conn, start_iso, end_iso)} "
-                f"AND lower(login) IN ({lower_placeholders}) GROUP BY login",
-                (start_iso, end_iso, *ordered_lower),
+                f"{_billing_dedup_sql(conn, credit_start_iso, credit_end_iso)} "
+                f"AND lower(login) IN ({lower_placeholders}) GROUP BY lower(login)",
+                (credit_start_iso, credit_end_iso, *ordered_lower),
             ).fetchall():
-                canonical = lower_map.get((row["login"] or "").lower(), row["login"])
+                canonical = lower_map.get(row["login"] or "", row["login"])
                 cost_by_login[canonical] = round(float(row["net"] or 0), 2)
 
     rows_out: list[dict[str, Any]] = []
@@ -1441,6 +1442,7 @@ def users_list(
     available per-user signal.
     """
     start_iso, end_iso, _ = _window(days=days, start=start, end=end, default_days=30)
+    credit_start_iso, credit_end_iso = _credit_window_with_login_fallback(start_iso, end_iso)
     start_dt = f"{start_iso}T00:00:00+00:00"
     end_dt = f"{end_iso}T23:59:59+00:00"
     with db.connect() as conn:
@@ -1462,10 +1464,10 @@ def users_list(
             f"{_BILLING_MIN_DATE_SQL} "
             "AND lower(product) LIKE '%copilot%' "
             f"AND {_COPILOT_BILLABLE_SKU_SQL} "
-            f"{_billing_dedup_sql(conn, start_iso, end_iso)} "
+            f"{_billing_dedup_sql(conn, credit_start_iso, credit_end_iso)} "
             "AND login != '' "
             "GROUP BY lower(login)",
-            (start_iso, end_iso),
+            (credit_start_iso, credit_end_iso),
         ).fetchall()
     credits_by_login: dict[str, float] = {
         r["login"]: round(float(r["qty"] or 0), 2) for r in credit_rows
@@ -1651,10 +1653,20 @@ def _is_legacy_premium_request_sku(sku: str | None) -> bool:
 # SQL predicate matching billable Copilot usage SKUs: legacy premium requests
 # plus AI-credit SKUs (e.g. ``copilot_ai_credit``) surfaced by CSV billing
 # reports. Kept in one place so every rollup query stays consistent.
-_COPILOT_BILLABLE_SKU_SQL = (
-    "((lower(sku) LIKE '%premium%' AND lower(sku) LIKE '%request%') "
-    "OR lower(sku) LIKE '%ai_credit%' OR lower(sku) LIKE '%ai credit%')"
-)
+def _copilot_billable_sku_sql(alias: str = "") -> str:
+    """Return SQL predicate matching billable Copilot usage SKUs.
+
+    Args:
+        alias: Optional table alias for qualifying ``sku``.
+    """
+    prefix = f"{alias}." if alias else ""
+    return (
+        f"((lower({prefix}sku) LIKE '%premium%' AND lower({prefix}sku) LIKE '%request%') "
+        f"OR lower({prefix}sku) LIKE '%ai_credit%' OR lower({prefix}sku) LIKE '%ai credit%')"
+    )
+
+
+_COPILOT_BILLABLE_SKU_SQL = _copilot_billable_sku_sql()
 
 # Query-time guard so rows imported before billing launch never leak into
 # rollups, even if legacy data still exists in the DB.
@@ -1664,32 +1676,84 @@ _BILLING_MIN_DATE_SQL = f"AND date >= '{BILLING_MIN_DATE}'"
 def _billing_dedup_sql(
     conn: Any, start_iso: str, end_iso: str,
 ) -> str:
-    """Return a SQL fragment that prevents double-counting billing rows.
+    """Return SQL fragment to deduplicate overlapping billing rows.
 
-    When both the AI-usage CSV (per-user/per-model detail) and the general
-    usage CSV (monthly aggregates) have been imported, their rows overlap.
-    This helper returns a conditional filter:
+    Rule for billable Copilot SKUs:
+    keep model-attributed rows; keep non-model rows only when no matching
+    model-attributed row exists for the same ``(date, login, sku)``.
 
-    * **AI-credit SKUs** — keep only model-attributed rows (``model != ''``).
-    * **Non-AI-credit SKUs** (licenses) — keep only login-attributed rows
-      (``login != ''``), excluding the general-CSV monthly aggregate.
-
-    Returns ``""`` when only non-detailed data exists (general CSV only).
+    This avoids a window-level mode switch where one model row in range could
+    zero out valid non-model usage for other users/teams.
     """
-    has = conn.execute(
-        "SELECT 1 FROM billing_usage WHERE date BETWEEN ? AND ? "
-        f"{_BILLING_MIN_DATE_SQL} "
-        "AND lower(product) LIKE '%copilot%' "
-        f"AND {_COPILOT_BILLABLE_SKU_SQL} "
-        "AND model != '' LIMIT 1",
-        (start_iso, end_iso),
-    ).fetchone()
-    if has:
-        return (
-            f"AND (({_COPILOT_BILLABLE_SKU_SQL} AND model != '') "
-            f"OR (NOT ({_COPILOT_BILLABLE_SKU_SQL}) AND login != ''))"
-        )
-    return ""
+    _ = conn, start_iso, end_iso
+    model_billable_predicate = _copilot_billable_sku_sql("bu_model")
+    return (
+        "AND ("
+        f"NOT ({_COPILOT_BILLABLE_SKU_SQL}) "
+        "OR model != '' "
+        "OR NOT EXISTS ("
+        "SELECT 1 FROM billing_usage bu_model "
+        "WHERE bu_model.date = billing_usage.date "
+        f"AND bu_model.date >= '{BILLING_MIN_DATE}' "
+        "AND lower(bu_model.product) LIKE '%copilot%' "
+        f"AND {model_billable_predicate} "
+        "AND lower(bu_model.sku) = lower(billing_usage.sku) "
+        "AND ((billing_usage.login != '' AND lower(bu_model.login) = lower(billing_usage.login)) "
+        "OR billing_usage.login = '') "
+        "AND bu_model.model != ''"
+        ")"
+        ")"
+    )
+
+
+def _credit_window_with_login_fallback(
+    start_iso: str,
+    end_iso: str,
+) -> tuple[str, str]:
+    """Return credit window shifted to latest login-attributed data when needed.
+
+    Users/Teams views require per-login attribution. If a requested window has
+    only org-level aggregate rows (``login == ''``), shift the credit window to
+    the most recent same-length window ending at the latest date with
+    login-attributed billable Copilot usage at or before ``end_iso``.
+    """
+    start_d = _parse_date(start_iso)
+    end_d = _parse_date(end_iso)
+    if start_d is None or end_d is None:
+        return start_iso, end_iso
+    if start_d > end_d:
+        start_d, end_d = end_d, start_d
+    window_days = (end_d - start_d).days + 1
+
+    with db.connect() as conn:
+        has_login_rows = conn.execute(
+            "SELECT 1 FROM billing_usage WHERE date BETWEEN ? AND ? "
+            f"{_BILLING_MIN_DATE_SQL} "
+            "AND lower(product) LIKE '%copilot%' "
+            f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            "AND login != '' LIMIT 1",
+            (start_d.isoformat(), end_d.isoformat()),
+        ).fetchone()
+        if has_login_rows:
+            return start_d.isoformat(), end_d.isoformat()
+
+        latest = conn.execute(
+            "SELECT MAX(date) AS latest_date FROM billing_usage WHERE date <= ? "
+            f"{_BILLING_MIN_DATE_SQL} "
+            "AND lower(product) LIKE '%copilot%' "
+            f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            "AND login != ''",
+            (end_d.isoformat(),),
+        ).fetchone()
+
+    latest_iso = (latest["latest_date"] if latest else None) or ""
+    latest_d = _parse_date(latest_iso)
+    if latest_d is None:
+        return start_d.isoformat(), end_d.isoformat()
+
+    shifted_end = latest_d
+    shifted_start = shifted_end - timedelta(days=window_days - 1)
+    return shifted_start.isoformat(), shifted_end.isoformat()
 
 
 def _is_copilot_billable_sku(sku: str | None) -> bool:
@@ -2059,18 +2123,20 @@ def ai_credits_for_user(
 ) -> dict[str, Any]:
     """Per-user AI-credit usage over a window."""
     start_iso, end_iso, _ = _window(days=days, start=start, end=end, default_days=30)
+    credit_start_iso, credit_end_iso = _credit_window_with_login_fallback(start_iso, end_iso)
     with db.connect() as conn:
         try:
-            dedup = _billing_dedup_sql(conn, start_iso, end_iso)
+            dedup = _billing_dedup_sql(conn, credit_start_iso, credit_end_iso)
             rows = conn.execute(
                 "SELECT date, sku, model, SUM(quantity) AS qty, SUM(net_amount_usd) AS net "
                 "FROM billing_usage WHERE date BETWEEN ? AND ? "
                 f"{_BILLING_MIN_DATE_SQL} "
                 "AND lower(login) = lower(?) "
                 "AND lower(product) LIKE '%copilot%' "
+                f"AND {_COPILOT_BILLABLE_SKU_SQL} "
                 f"{dedup} "
                 "GROUP BY date, sku, model ORDER BY date ASC, sku ASC",
-                (start_iso, end_iso, login),
+                (credit_start_iso, credit_end_iso, login),
             ).fetchall()
         except Exception:
             rows = []
@@ -2100,8 +2166,8 @@ def ai_credits_for_user(
         bucket["net_amount_usd"] += net
     return {
         "login": login,
-        "window_start": start_iso,
-        "window_end": end_iso,
+        "window_start": credit_start_iso,
+        "window_end": credit_end_iso,
         "ai_credits": round(total_qty, 2),
         "ai_credit_cost_usd": round(total_net, 2),
         "by_sku": [
@@ -2134,6 +2200,7 @@ def ai_credits_for_team(
 ) -> dict[str, Any]:
     """Aggregate AI-credit usage for a team by summing its members."""
     start_iso, end_iso, _ = _window(days=days, start=start, end=end, default_days=30)
+    credit_start_iso, credit_end_iso = _credit_window_with_login_fallback(start_iso, end_iso)
     with db.connect() as conn:
         member_rows = conn.execute(
             "SELECT login FROM team_members WHERE team_slug = ?", (team_slug,)
@@ -2158,10 +2225,10 @@ def ai_credits_for_team(
             f"{_BILLING_MIN_DATE_SQL} "
             f"AND lower(product) LIKE '%copilot%' "
             f"AND {_COPILOT_BILLABLE_SKU_SQL} "
-            f"{_billing_dedup_sql(conn, start_iso, end_iso)} "
+            f"{_billing_dedup_sql(conn, credit_start_iso, credit_end_iso)} "
             f"AND lower(login) IN ({placeholders}) "
             f"GROUP BY login ORDER BY qty DESC",
-            (start_iso, end_iso, *[m.lower() for m in members]),
+            (credit_start_iso, credit_end_iso, *[m.lower() for m in members]),
         ).fetchall()
     top_users = [
         {
@@ -2175,8 +2242,8 @@ def ai_credits_for_team(
     total_net = sum(u["net_amount_usd"] for u in top_users)
     return {
         "team": team_slug,
-        "window_start": start_iso,
-        "window_end": end_iso,
+        "window_start": credit_start_iso,
+        "window_end": credit_end_iso,
         "members": len(members),
         "ai_credits": round(total_qty, 2),
         "ai_credit_cost_usd": round(total_net, 2),

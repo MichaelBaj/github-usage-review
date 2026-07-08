@@ -444,6 +444,67 @@ def test_user_detail_returns_seat_and_prs(db_with_models: None) -> None:
     assert len(out["daily"]) >= 1
 
 
+def test_users_and_user_detail_keep_non_model_ai_credits_without_same_login_model_row() -> None:
+    """Users list/detail should keep non-model credits when model rows exist for others."""
+    # Arrange
+    db.init_db()
+    now = datetime.now(UTC)
+    today = now.date().isoformat()
+    seats = [
+        _normalize_seat(
+            {
+                "assignee": {"login": "alice"},
+                "assigning_team": {"slug": "alpha", "name": "Alpha"},
+                "created_at": (now - timedelta(days=30)).isoformat(),
+                "last_activity_at": (now - timedelta(days=1)).isoformat(),
+                "last_activity_editor": "vscode",
+            }
+        ),
+        _normalize_seat(
+            {
+                "assignee": {"login": "bob"},
+                "assigning_team": {"slug": "alpha", "name": "Alpha"},
+                "created_at": (now - timedelta(days=40)).isoformat(),
+                "last_activity_at": (now - timedelta(days=2)).isoformat(),
+                "last_activity_editor": "vscode",
+            }
+        ),
+    ]
+    db.replace_seats(seats)
+    db.replace_team_members("alpha", ["alice", "bob"])
+    db.replace_billing_usage(
+        [
+            {
+                "date": today,
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 13,
+                "net_amount_usd": 0.52,
+                "model": "",
+            },
+            {
+                "date": today,
+                "login": "bob",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 5,
+                "net_amount_usd": 0.20,
+                "model": "GPT-5.4",
+            },
+        ]
+    )
+
+    # Act
+    users = analytics.users_list(start=today, end=today)
+    detail = analytics.user_detail("alice", start=today, end=today)
+
+    # Assert
+    by_login = {u["login"]: u for u in users}
+    assert by_login["alice"]["ai_credits"] == pytest.approx(13.0)
+    assert detail["totals"]["ai_credits"] == pytest.approx(13.0)
+
+
 def test_kpis_include_window_cost(db_with_models: None) -> None:
     """KPIs now expose ``window_cost_usd`` aligned to the requested window."""
     # Act
@@ -464,3 +525,122 @@ def test_kpis_accepts_explicit_start_end(db_with_models: None) -> None:
     assert out["window_start"] == "2026-01-01"
     assert out["window_end"] == "2026-01-10"
     assert out["window_days"] == 10
+
+
+def test_users_list_falls_back_to_latest_login_attributed_credit_window() -> None:
+    """Users list should avoid zeroing when recent days only have org-level rows."""
+    # Arrange
+    db.init_db()
+    now = datetime.now(UTC)
+    today = now.date()
+    old_day = (today - timedelta(days=8)).isoformat()
+    recent_day = (today - timedelta(days=1)).isoformat()
+
+    db.replace_seats(
+        [
+            _normalize_seat(
+                {
+                    "assignee": {"login": "alice"},
+                    "assigning_team": {"slug": "alpha", "name": "Alpha"},
+                    "created_at": (now - timedelta(days=30)).isoformat(),
+                    "last_activity_at": (now - timedelta(days=1)).isoformat(),
+                    "last_activity_editor": "vscode",
+                }
+            ),
+        ]
+    )
+    db.replace_billing_usage(
+        [
+            {
+                "date": old_day,
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 21,
+                "net_amount_usd": 0.84,
+                "model": "",
+                "source": "csv_usage_report",
+            },
+            {
+                "date": recent_day,
+                "login": "",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 99,
+                "net_amount_usd": 3.96,
+                "model": "",
+                "source": "",
+            },
+        ]
+    )
+
+    # Act
+    out = analytics.users_list(days=7)
+
+    # Assert
+    by_login = {u["login"]: u for u in out}
+    assert by_login["alice"]["ai_credits"] == pytest.approx(21.0)
+
+
+def test_team_detail_falls_back_to_latest_login_attributed_credit_window() -> None:
+    """Team detail credits should avoid zeroing when recent days only have org-level rows."""
+    # Arrange
+    db.init_db()
+    now = datetime.now(UTC)
+    today = now.date()
+    old_day = (today - timedelta(days=8)).isoformat()
+    recent_day = (today - timedelta(days=1)).isoformat()
+
+    # Seed one day of team/org metrics so team_detail has a valid trend context.
+    day = _day(old_day)
+    db.upsert_org_day(old_day, day["total_active_users"], day["total_engaged_users"], day)
+    db.replace_language_rows(old_day, _flatten_languages(day))
+    db.replace_model_rows(old_day, "org", "", _flatten_models(day))
+    db.upsert_team_day(old_day, "alpha", day["total_active_users"], day["total_engaged_users"], day)
+    db.replace_team_language_rows(old_day, "alpha", _flatten_languages(day))
+    db.replace_model_rows(old_day, "team", "alpha", _flatten_models(day))
+
+    db.replace_seats(
+        [
+            _normalize_seat(
+                {
+                    "assignee": {"login": "alice"},
+                    "assigning_team": {"slug": "alpha", "name": "Alpha"},
+                    "created_at": (now - timedelta(days=30)).isoformat(),
+                    "last_activity_at": (now - timedelta(days=1)).isoformat(),
+                    "last_activity_editor": "vscode",
+                }
+            ),
+        ]
+    )
+    db.replace_team_members("alpha", ["alice"])
+    db.replace_billing_usage(
+        [
+            {
+                "date": old_day,
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 33,
+                "net_amount_usd": 1.32,
+                "model": "",
+                "source": "csv_usage_report",
+            },
+            {
+                "date": recent_day,
+                "login": "",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 101,
+                "net_amount_usd": 4.04,
+                "model": "",
+                "source": "",
+            },
+        ]
+    )
+
+    # Act
+    out = analytics.team_detail("alpha", days=7)
+
+    # Assert
+    assert out["ai_credits"]["ai_credits"] == pytest.approx(33.0)

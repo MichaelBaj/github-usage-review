@@ -1,7 +1,6 @@
 services:
   backend:
     build: ./backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app
     env_file: .env
     environment:
       DB_PATH: /data/copilot.db
@@ -22,8 +21,6 @@ services:
   frontend:
     build:
       context: ./frontend
-      target: build
-    command: npm run dev -- --host 0.0.0.0 --port 5173
     environment:
       VITE_API_TARGET: http://backend:8000
     depends_on:

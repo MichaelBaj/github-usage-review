@@ -450,6 +450,76 @@ def test_ai_credits_summary_deduplicates_overlapping_sources() -> None:
     assert out["top_users"][0]["ai_credits"] == pytest.approx(100.0)
 
 
+def test_ai_credits_for_user_keeps_non_model_rows_without_same_user_model_match() -> None:
+    """User credits should not drop when another user has model-attributed rows."""
+    # Arrange
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-06-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 7,
+                "net_amount_usd": 0.28,
+                "model": "",
+            },
+            {
+                "date": "2026-06-01",
+                "login": "bob",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 11,
+                "net_amount_usd": 0.44,
+                "model": "GPT-5.4",
+            },
+        ]
+    )
+
+    # Act
+    out = analytics.ai_credits_for_user("alice", start="2026-06-01", end="2026-06-01")
+
+    # Assert
+    assert out["ai_credits"] == pytest.approx(7.0)
+
+
+def test_ai_credits_for_team_keeps_non_model_rows_without_member_model_match() -> None:
+    """Team credits should include member rows even if model rows exist for other users."""
+    # Arrange
+    db.init_db()
+    db.replace_team_members("alpha", ["alice"])
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-06-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 9,
+                "net_amount_usd": 0.36,
+                "model": "",
+            },
+            {
+                "date": "2026-06-01",
+                "login": "bob",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 14,
+                "net_amount_usd": 0.56,
+                "model": "Claude Opus 4.6",
+            },
+        ]
+    )
+
+    # Act
+    out = analytics.ai_credits_for_team("alpha", start="2026-06-01", end="2026-06-01")
+
+    # Assert
+    assert out["ai_credits"] == pytest.approx(9.0)
+    assert out["members"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Headline AI-credit aggregate (ai_credit/usage endpoint)
 # ---------------------------------------------------------------------------
