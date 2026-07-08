@@ -5,7 +5,7 @@ import { TeamsTab } from "./components/TeamsTab";
 import { UsersTab } from "./components/UsersTab";
 import { QualityTab } from "./components/QualityTab";
 // Calendar-date versioning (YYYY-MM-DD.build)
-const VERSION = "2026-07-08.1";
+const VERSION = "2026-07-08.2";
 
 
 type Tab = "summary" | "teams" | "users" | "quality";
@@ -28,9 +28,19 @@ export function App(): JSX.Element {
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [dataVersion, setDataVersion] = useState(0);
-  const [lastLoad, setLastLoad] = useState<{ at: string | null; source: string | null; historyDays: number | null }>({
-    at: null,
-    source: null,
+  const [lastLoad, setLastLoad] = useState<{
+    apiAt: string | null;
+    csvAt: string | null;
+    csvSource: string | null;
+    jsonAt: string | null;
+    jsonSource: string | null;
+    historyDays: number | null;
+  }>({
+    apiAt: null,
+    csvAt: null,
+    csvSource: null,
+    jsonAt: null,
+    jsonSource: null,
     historyDays: null,
   });
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
@@ -49,8 +59,11 @@ export function App(): JSX.Element {
   useEffect(() => {
     Promise.all([api.kpis({ days: 1 }), api.projections()]).then(([k, p]) =>
       setLastLoad({
-        at: k.last_data_load_at ?? k.last_snapshot_at,
-        source: k.last_data_load_source ?? (k.last_snapshot_at ? "api" : null),
+        apiAt: k.last_api_load_at ?? k.last_snapshot_at ?? null,
+        csvAt: k.last_csv_load_at ?? null,
+        csvSource: k.last_csv_load_source ?? null,
+        jsonAt: k.last_json_load_at ?? null,
+        jsonSource: k.last_json_load_source ?? null,
         historyDays: p.available ? (p.history_days ?? null) : null,
       }),
     ).catch(() => undefined);
@@ -136,18 +149,26 @@ export function App(): JSX.Element {
     }
   }
 
-  const lastLoadLabel = lastLoad.at ? `${lastLoad.source ?? "unknown"}: ${lastLoad.at}` : "never";
+  const apiLabel = lastLoad.apiAt ? lastLoad.apiAt : "never";
+  const csvLabel = lastLoad.csvAt ? lastLoad.csvAt : "never";
+  const jsonLabel = lastLoad.jsonAt ? lastLoad.jsonAt : "never";
 
   return (
     <div className="layout">
       <div className="header">
         <div>
           <h1>Copilot Usage Review</h1>
-          <div className="meta">Last data load: {lastLoadLabel}</div>
-                    <div className="meta">Version: {VERSION}</div>
-          {lastLoad.historyDays != null ? (
-            <div className="meta">History collected: {lastLoad.historyDays} days</div>
-          ) : null}
+          <table className="meta-table">
+            <tbody>
+              <tr><td>Last data load: API:</td><td>{apiLabel}</td></tr>
+              <tr><td>Last data load: CSV:</td><td>{csvLabel}</td></tr>
+              <tr><td>Last data load: JSON:</td><td>{jsonLabel}</td></tr>
+              <tr><td>Version:</td><td>{VERSION}</td></tr>
+              {lastLoad.historyDays != null ? (
+                <tr><td>History collected:</td><td>{lastLoad.historyDays} days</td></tr>
+              ) : null}
+            </tbody>
+          </table>
         </div>
         <div className="header-actions">
           <button onClick={refresh} disabled={refreshing || importing} className={snapshotDone === true ? "btn-success" : undefined}>

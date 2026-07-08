@@ -46,6 +46,24 @@ body {
   font-size: 13px;
 }
 
+.meta-table {
+  width: auto;
+  border-collapse: collapse;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.meta-table td {
+  padding: 0 8px 0 0;
+  border: none;
+  white-space: nowrap;
+}
+
+.meta-table td:first-child {
+  text-align: left;
+  padding-right: 12px;
+}
+
 .header-actions {
   display: flex;
   align-items: center;
@@ -167,6 +185,7 @@ td {
   text-align: left;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
+  white-space: nowrap;
 }
 
 th {

@@ -768,4 +768,5 @@ async def run_snapshot() -> dict[str, Any]:
     db.set_meta("last_snapshot_at", summary["finished_at"])
     db.set_meta("last_data_load_at", summary["finished_at"])
     db.set_meta("last_data_load_source", "api")
+    db.set_meta("last_api_load_at", summary["finished_at"])
     return summary

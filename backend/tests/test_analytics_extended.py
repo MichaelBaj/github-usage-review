@@ -527,8 +527,8 @@ def test_kpis_accepts_explicit_start_end(db_with_models: None) -> None:
     assert out["window_days"] == 10
 
 
-def test_users_list_falls_back_to_latest_login_attributed_credit_window() -> None:
-    """Users list should avoid zeroing when recent days only have org-level rows."""
+def test_users_list_returns_zero_credits_when_no_login_data_in_window() -> None:
+    """Users list should return 0 credits when window has only org-level rows (no per-user attribution)."""
     # Arrange
     db.init_db()
     now = datetime.now(UTC)
@@ -574,16 +574,16 @@ def test_users_list_falls_back_to_latest_login_attributed_credit_window() -> Non
         ]
     )
 
-    # Act
+    # Act — request last 7 days (old_day is outside this window)
     out = analytics.users_list(days=7)
 
-    # Assert
+    # Assert — no login-attributed data in the 7-day window → 0 credits
     by_login = {u["login"]: u for u in out}
-    assert by_login["alice"]["ai_credits"] == pytest.approx(21.0)
+    assert by_login["alice"]["ai_credits"] == 0.0
 
 
-def test_team_detail_falls_back_to_latest_login_attributed_credit_window() -> None:
-    """Team detail credits should avoid zeroing when recent days only have org-level rows."""
+def test_team_detail_returns_zero_credits_when_no_login_data_in_window() -> None:
+    """Team detail credits should be 0 when window has only org-level rows (no per-user attribution)."""
     # Arrange
     db.init_db()
     now = datetime.now(UTC)
@@ -639,8 +639,9 @@ def test_team_detail_falls_back_to_latest_login_attributed_credit_window() -> No
         ]
     )
 
-    # Act
+    # Act — request last 7 days (old_day is outside this window)
     out = analytics.team_detail("alpha", days=7)
 
-    # Assert
-    assert out["ai_credits"]["ai_credits"] == pytest.approx(33.0)
+    # Assert — no login-attributed data in the 7-day window → 0 credits
+    assert out["ai_credits"]["ai_credits"] == 0.0
+    assert out["ai_credits"]["credit_data_available"] is False

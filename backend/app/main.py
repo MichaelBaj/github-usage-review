@@ -84,6 +84,11 @@ def health() -> dict[str, Any]:
         "last_snapshot_at": db.get_meta("last_snapshot_at"),
         "last_data_load_at": db.get_meta("last_data_load_at"),
         "last_data_load_source": db.get_meta("last_data_load_source"),
+        "last_api_load_at": db.get_meta("last_api_load_at"),
+        "last_csv_load_at": db.get_meta("last_csv_load_at"),
+        "last_csv_load_source": db.get_meta("last_csv_load_source"),
+        "last_json_load_at": db.get_meta("last_json_load_at"),
+        "last_json_load_source": db.get_meta("last_json_load_source"),
         "version": VERSION,
     }
 

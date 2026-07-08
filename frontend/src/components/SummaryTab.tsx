@@ -18,7 +18,7 @@ import { TeamLeaderboard } from "./TeamLeaderboard";
 import { StaleSeats } from "./StaleSeats";
 import { BreakdownCharts } from "./BreakdownCharts";
 import {
-  defaultWindow,
+  defaultWindowThisMonth,
   DateRangeSelector,
   toWindowParams,
   type WindowState,
@@ -158,7 +158,7 @@ function BalancedUsersTable({ users }: { users: AiCreditBalancedUser[] }): JSX.E
 }
 
 export function SummaryTab(): JSX.Element {
-  const [win, setWin] = useState<WindowState>(defaultWindow(30));
+  const [win, setWin] = useState<WindowState>(defaultWindowThisMonth());
   const [state, setState] = useState<State>(initial);
 
   async function load(): Promise<void> {
@@ -245,7 +245,7 @@ export function SummaryTab(): JSX.Element {
                   }
                 />
                 <Kpi
-                  label="AI credits"
+                  label="AI credits consumed"
                   value={
                     state.premium?.headline_ai_credits != null
                       ? fmtNum(state.premium.headline_ai_credits)
@@ -266,7 +266,8 @@ export function SummaryTab(): JSX.Element {
                   tooltip={
                     (state.premium?.headline_ai_credits != null
                       ? "Headline total from GitHub ai_credit/usage aggregate endpoint (freshest). "
-                      : "Total from per-day billing rows. ") +
+                      : "Total consumed credits from per-day billing rows. ") +
+                    "Org-level unit_type=AICredits rows (credits applied/discount allowance) are excluded from consumed totals. " +
                     "Sub-value is net cost (USD) for billable Copilot SKUs."
                   }
                 />
@@ -277,6 +278,9 @@ export function SummaryTab(): JSX.Element {
                 const aiNet = state.premium!.total_ai_credit_cost_usd;
                 const included = aiGross - aiNet;
                 const licenses = state.cost!.window_cost_usd - aiNet;
+                const appliedCredits = state.premium!.credits_applied_month ?? 0;
+                const appliedDiscountUsd = state.premium!.credits_applied_discount_usd_month ?? 0;
+                const appliedMonthLabel = state.premium!.credits_applied_month_label || "selected month";
                 return (
                   <div style={{ marginTop: 16 }}>
                     <h3 className="subhead">Cost Breakdown</h3>
@@ -307,6 +311,11 @@ export function SummaryTab(): JSX.Element {
                           <td>Included usage discount</td>
                           <td className="num-col">−{fmtMoney(included)}</td>
                           <td className="muted">Credits covered by plan allowance</td>
+                        </tr>
+                        <tr>
+                          <td>Credits applied ({appliedMonthLabel})</td>
+                          <td className="num-col">{fmtNum(appliedCredits)}</td>
+                          <td className="muted">Equivalent to {fmtMoney(appliedDiscountUsd)} included usage discount</td>
                         </tr>
                         <tr>
                           <td>AI credits overage (net)</td>

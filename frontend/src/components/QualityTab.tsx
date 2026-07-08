@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type QualitySummary } from "../api";
 import {
-  defaultWindow,
+  defaultWindowThisMonth,
   DateRangeSelector,
   toWindowParams,
   type WindowState,
@@ -9,7 +9,7 @@ import {
 import { fmtNum, fmtPct, Kpi, ModelSummaryTable, CodeEditorTable, PrCorrelationTable, fmtMoney } from "./TeamsTab";
 
 export function QualityTab(): JSX.Element {
-  const [win, setWin] = useState<WindowState>(defaultWindow(30));
+  const [win, setWin] = useState<WindowState>(defaultWindowThisMonth());
   const [data, setData] = useState<QualitySummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -201,11 +201,11 @@ export function QualityTab(): JSX.Element {
           <>
             <div className="kpi-grid">
               <Kpi
-                label="AI credits (window)"
+                label="AI credits consumed (window)"
                 value={fmtNum(data.ai_credits.total_ai_credits)}
                 tooltip={
                   "Sum of billable Copilot SKU quantity across the org for the window " +
-                  "(enhanced-billing API)."
+                  "(enhanced-billing API), excluding org-level unit_type=AICredits rows that represent applied credits/discount allowance."
                 }
               />
               <Kpi
@@ -216,7 +216,7 @@ export function QualityTab(): JSX.Element {
                 }
               />
             </div>
-            <h3 className="subhead">By Billable SKU</h3>
+            <h3 className="subhead">By Consumed Billable SKU</h3>
             <table>
               <thead>
                 <tr>

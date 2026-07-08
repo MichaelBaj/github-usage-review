@@ -38,6 +38,11 @@ export interface Kpis {
   last_snapshot_at: string | null;
   last_data_load_at: string | null;
   last_data_load_source: "api" | "json_import" | string | null;
+  last_api_load_at: string | null;
+  last_csv_load_at: string | null;
+  last_csv_load_source: string | null;
+  last_json_load_at: string | null;
+  last_json_load_source: string | null;
 }
 
 export interface ImportResult {
@@ -82,6 +87,7 @@ export interface TeamRow {
   never_used_members: number;
   adoption_rate: number;
   ai_credits: number;
+  credit_data_available: boolean;
   window_cost_usd: number;
   prs: number;
   merged_prs: number;
@@ -442,6 +448,9 @@ export interface AiCreditsSummary {
   headline_ai_credit_cost_usd: number | null;
   headline_ai_credit_gross_usd: number | null;
   headline_fetched_at: string | null;
+  credits_applied_month_label: string;
+  credits_applied_month: number;
+  credits_applied_discount_usd_month: number;
   skus: AiCreditSku[];
   top_users: AiCreditUser[];
   top_users_per_model?: AiCreditTopUsersPerModel[];
@@ -459,6 +468,7 @@ export interface AiCreditsUser {
   window_end: string;
   ai_credits: number;
   ai_credit_cost_usd: number;
+  credit_data_available: boolean;
   by_sku: { sku: string; quantity: number; net_amount_usd: number }[];
   by_model: {
     model: string;
@@ -479,6 +489,7 @@ export interface AiCreditsTeam {
   ai_credits: number;
   ai_credit_cost_usd: number;
   top_users: AiCreditUser[];
+  credit_data_available: boolean;
   tokens_available: boolean;
   tokens_note: string;
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 export interface WindowState {
   days: number | null;
+  preset?: string;
   start: string;
   end: string;
 }
@@ -28,27 +29,49 @@ function isoDaysAgo(n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function firstOfMonth(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+function lastOfMonth(): string {
+  const d = new Date();
+  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return last.toISOString().slice(0, 10);
+}
+
 /** Date-range selector with preset shortcuts and custom from/to inputs. */
 export function DateRangeSelector({ value, onChange }: Props): JSX.Element {
   const [local, setLocal] = useState(value);
   useEffect(() => setLocal(value), [value]);
 
   function applyPreset(days: number): void {
-    const next: WindowState = { days, start: isoDaysAgo(days), end: todayIso() };
+    const next: WindowState = { days, preset: undefined, start: isoDaysAgo(days), end: todayIso() };
+    onChange(next);
+  }
+
+  function applyThisMonth(): void {
+    const next: WindowState = { days: null, preset: "month", start: firstOfMonth(), end: lastOfMonth() };
     onChange(next);
   }
 
   function applyCustom(): void {
-    onChange({ days: null, start: local.start, end: local.end });
+    onChange({ days: null, preset: undefined, start: local.start, end: local.end });
   }
 
   return (
     <div className="window-bar">
       <span className="window-label">Window:</span>
+      <button
+        className={value.preset === "month" ? "chip chip-on" : "chip"}
+        onClick={applyThisMonth}
+      >
+        This month
+      </button>
       {PRESETS.map((p) => (
         <button
           key={p.label}
-          className={value.days === p.days ? "chip chip-on" : "chip"}
+          className={value.days === p.days && !value.preset ? "chip chip-on" : "chip"}
           onClick={() => applyPreset(p.days)}
         >
           {p.label}
@@ -57,13 +80,13 @@ export function DateRangeSelector({ value, onChange }: Props): JSX.Element {
       <input
         type="date"
         value={local.start}
-        onChange={(e) => setLocal({ ...local, start: e.target.value, days: null })}
+        onChange={(e) => setLocal({ ...local, start: e.target.value, days: null, preset: undefined })}
       />
       <span>→</span>
       <input
         type="date"
         value={local.end}
-        onChange={(e) => setLocal({ ...local, end: e.target.value, days: null })}
+        onChange={(e) => setLocal({ ...local, end: e.target.value, days: null, preset: undefined })}
       />
       <button onClick={applyCustom} className="chip">
         Apply
@@ -75,7 +98,12 @@ export function DateRangeSelector({ value, onChange }: Props): JSX.Element {
   );
 }
 
-/** Convenience: build the initial window state (last 30 days). */
+/** Convenience: build a window state for the current calendar month (default). */
+export function defaultWindowThisMonth(): WindowState {
+  return { days: null, preset: "month", start: firstOfMonth(), end: lastOfMonth() };
+}
+
+/** Convenience: build the initial window state (last N days). */
 export function defaultWindow(days = 30): WindowState {
   return { days, start: isoDaysAgo(days), end: todayIso() };
 }
