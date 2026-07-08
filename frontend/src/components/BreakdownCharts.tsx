@@ -9,6 +9,7 @@ import {
   Legend,
   ResponsiveContainer,
   CartesianGrid,
+  ReferenceLine,
 } from "recharts";
 import { type Breakdowns, type FeatureBreakdown, type AiCreditsProjection } from "../api";
 
@@ -50,6 +51,101 @@ export function BreakdownCharts({ data, features, creditProjection }: Props): JS
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
       <div style={{ display: "flex", flexDirection: "row", gap: 24 }}>
+        {projectionData && creditProjection && (() => {
+          const quota = creditProjection.monthly_quota_credits;
+          const lastCur = creditProjection.current_month.length > 0
+            ? creditProjection.current_month[creditProjection.current_month.length - 1].cumulative
+            : 0;
+          const pctUsed = quota && quota > 0 ? lastCur / quota : 0;
+          const curStroke = pctUsed >= 1.0 ? "#f85149" : pctUsed >= 0.8 ? "#d29922" : "#58a6ff";
+
+          return (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h3 style={{ margin: "0 0 4px 0", fontSize: 14, color: "#8b949e" }}>
+              AI Credit Usage — Month over Month
+            </h3>
+            {creditProjection.current_month.length === 0 && (
+              <p style={{ margin: "0 0 8px 0", fontSize: 12, color: "#6e7681" }}>
+                No billing data for {creditProjection.current_month_label} yet — run a snapshot or import a billing CSV to populate the current month line.
+              </p>
+            )}
+            <ResponsiveContainer width="100%" height={320}>
+              <LineChart data={projectionData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#30363d" />
+                <XAxis
+                  dataKey="day"
+                  stroke="#8b949e"
+                  fontSize={11}
+                  label={{ value: "Day of month", position: "insideBottomRight", offset: -4, style: { fill: "#8b949e", fontSize: 11 } }}
+                />
+                <YAxis stroke="#8b949e" fontSize={11} />
+                <Tooltip
+                  contentStyle={{ background: "#161b22", border: "1px solid #30363d", fontSize: 12 }}
+                  labelFormatter={(label) => `Day ${label}`}
+                />
+                <Legend wrapperStyle={{ fontSize: 12, color: "#8b949e" }} />
+                {quota && quota > 0 && (
+                  <ReferenceLine
+                    y={quota}
+                    stroke="#f0883e"
+                    strokeDasharray="6 4"
+                    strokeWidth={1.5}
+                    label={{
+                      value: `Monthly Quota (${(quota / 1000).toFixed(0)}k)`,
+                      position: "right",
+                      style: { fill: "#f0883e", fontSize: 11 },
+                    }}
+                  />
+                )}
+                <Line
+                  type="monotone"
+                  dataKey="current"
+                  stroke={curStroke}
+                  strokeWidth={2}
+                  dot={false}
+                  name={creditProjection.current_month_label}
+                  connectNulls={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="previous"
+                  stroke="#8b949e"
+                  strokeWidth={2}
+                  strokeDasharray="5 3"
+                  dot={false}
+                  name={creditProjection.previous_month_label}
+                  connectNulls={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          );
+        })()}
+        {features && features.features.length > 0 && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h3 style={{ margin: "0 0 8px 0", fontSize: 14, color: "#8b949e" }}>
+              Feature Usage
+            </h3>
+            <ResponsiveContainer width="100%" height={320}>
+              <BarChart
+                data={features.features.map((f) => ({
+                  ...f,
+                  label: featureLabel(f.feature),
+                }))}
+                barCategoryGap="20%"
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#30363d" />
+                <XAxis dataKey="label" stroke="#8b949e" fontSize={11} angle={-35} textAnchor="end" height={90} interval={0} />
+                <YAxis stroke="#8b949e" fontSize={11} />
+                <Tooltip contentStyle={{ background: "#161b22", border: "1px solid #30363d" }} />
+                <Bar dataKey="interactions" fill="#f78166" name="Interactions" stackId="a" />
+                <Bar dataKey="code_generations" fill="#58a6ff" name="Code generated" stackId="a" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", flexDirection: "row", gap: 24 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <h3 style={{ margin: "0 0 8px 0", fontSize: 14, color: "#8b949e" }}>Top Languages</h3>
           <ResponsiveContainer width="100%" height={320}>
@@ -75,79 +171,6 @@ export function BreakdownCharts({ data, features, creditProjection }: Props): JS
             </BarChart>
           </ResponsiveContainer>
         </div>
-      </div>
-      <div style={{ display: "flex", flexDirection: "row", gap: 24 }}>
-        {projectionData && creditProjection && (
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <h3 style={{ margin: "0 0 4px 0", fontSize: 14, color: "#8b949e" }}>
-              AI Credit Usage — Month over Month
-            </h3>
-            {creditProjection.current_month.length === 0 && (
-              <p style={{ margin: "0 0 8px 0", fontSize: 12, color: "#6e7681" }}>
-                No billing data for {creditProjection.current_month_label} yet — run a snapshot or import a billing CSV to populate the current month line.
-              </p>
-            )}
-            <ResponsiveContainer width="100%" height={320}>
-              <LineChart data={projectionData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#30363d" />
-                <XAxis
-                  dataKey="day"
-                  stroke="#8b949e"
-                  fontSize={11}
-                  label={{ value: "Day of month", position: "insideBottomRight", offset: -4, style: { fill: "#8b949e", fontSize: 11 } }}
-                />
-                <YAxis stroke="#8b949e" fontSize={11} />
-                <Tooltip
-                  contentStyle={{ background: "#161b22", border: "1px solid #30363d", fontSize: 12 }}
-                  labelFormatter={(label) => `Day ${label}`}
-                />
-                <Legend wrapperStyle={{ fontSize: 12, color: "#8b949e" }} />
-                <Line
-                  type="monotone"
-                  dataKey="current"
-                  stroke="#58a6ff"
-                  strokeWidth={2}
-                  dot={false}
-                  name={creditProjection.current_month_label}
-                  connectNulls={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="previous"
-                  stroke="#8b949e"
-                  strokeWidth={2}
-                  strokeDasharray="5 3"
-                  dot={false}
-                  name={creditProjection.previous_month_label}
-                  connectNulls={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-        {features && features.features.length > 0 && (
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <h3 style={{ margin: "0 0 8px 0", fontSize: 14, color: "#8b949e" }}>
-              Feature Usage
-            </h3>
-            <ResponsiveContainer width="100%" height={320}>
-              <BarChart
-                data={features.features.map((f) => ({
-                  ...f,
-                  label: featureLabel(f.feature),
-                }))}
-                barCategoryGap="20%"
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke="#30363d" />
-                <XAxis dataKey="label" stroke="#8b949e" fontSize={11} angle={-35} textAnchor="end" height={90} interval={0} />
-                <YAxis stroke="#8b949e" fontSize={11} />
-                <Tooltip contentStyle={{ background: "#161b22", border: "1px solid #30363d" }} />
-                <Bar dataKey="interactions" fill="#f78166" name="Interactions" stackId="a" />
-                <Bar dataKey="code_generations" fill="#58a6ff" name="Code generated" stackId="a" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        )}
       </div>
     </div>
   );

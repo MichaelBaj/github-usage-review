@@ -271,6 +271,55 @@ export function SummaryTab(): JSX.Element {
                     "Sub-value is net cost (USD) for billable Copilot SKUs."
                   }
                 />
+                {state.creditProjection?.monthly_quota_credits != null && (() => {
+                  const quota = state.creditProjection!.monthly_quota_credits!;
+                  const consumed = state.premium?.total_ai_credits ?? 0;
+                  const today = new Date();
+                  const winEnd = new Date(win.end + "T00:00:00");
+                  const isCurrentMonth =
+                    winEnd.getFullYear() === today.getFullYear() &&
+                    winEnd.getMonth() === today.getMonth();
+
+                  if (!isCurrentMonth) {
+                    // Completed month — show actual vs quota, no extrapolation.
+                    const remaining = quota - consumed;
+                    const paceColor = remaining >= 0 ? "var(--color-success, #3fb950)" : "var(--color-danger, #f85149)";
+                    const paceLabel = remaining >= 0 ? "within budget" : "over quota";
+                    return (
+                      <Kpi
+                        label="Month total"
+                        value={`${(consumed / 1000).toFixed(0)}k`}
+                        sub={<span style={{ color: paceColor }}>{paceLabel}</span>}
+                        tooltip={
+                          `Completed month actual: ${fmtNum(consumed)} credits consumed. ` +
+                          `Monthly quota: ${fmtNum(quota)} credits. ` +
+                          `${remaining >= 0 ? `${fmtNum(remaining)} under` : `${fmtNum(Math.abs(remaining))} over`} quota.`
+                        }
+                      />
+                    );
+                  }
+
+                  const dayOfMonth = today.getDate();
+                  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+                  const projectedEom = dayOfMonth > 0 ? Math.round(consumed * (daysInMonth / dayOfMonth)) : 0;
+                  const overUnder = projectedEom - quota;
+                  const pctOver = quota > 0 ? ((overUnder / quota) * 100).toFixed(0) : "0";
+                  const paceLabel = overUnder <= 0
+                    ? "within budget"
+                    : `${pctOver}% over quota`;
+                  const paceColor = overUnder <= 0 ? "var(--color-success, #3fb950)" : "var(--color-danger, #f85149)";
+                  return (
+                    <Kpi
+                      label="Budget pace"
+                      value={`${(projectedEom / 1000).toFixed(0)}k`}
+                      sub={<span style={{ color: paceColor }}>{paceLabel}</span>}
+                      tooltip={
+                        `Projected EOM: ${fmtNum(projectedEom)} credits (linear extrapolation from day ${dayOfMonth}/${daysInMonth}). ` +
+                        `Monthly quota: ${fmtNum(quota)} credits.`
+                      }
+                    />
+                  );
+                })()}
               </div>
 
               {state.premium?.available ? (() => {
@@ -336,6 +385,31 @@ export function SummaryTab(): JSX.Element {
                           <td className="num-col">{fmtMoney(state.cost!.window_cost_usd)}</td>
                           <td className="muted">Licenses + AI overage = GitHub "gross spend"</td>
                         </tr>
+                        {state.creditProjection?.monthly_quota_credits != null && (() => {
+                          const quota = state.creditProjection!.monthly_quota_credits!;
+                          const consumed = state.premium!.total_ai_credits;
+                          const remaining = quota - consumed;
+                          const pctUsed = quota > 0 ? (consumed / quota) * 100 : 0;
+                          const budgetUsd = state.creditProjection!.budget_usd;
+                          const includedCr = state.creditProjection!.included_credits;
+                          const noteParts: string[] = [];
+                          if (budgetUsd) noteParts.push(`$${fmtNum(budgetUsd)} budget`);
+                          if (includedCr) noteParts.push(`${fmtNum(includedCr)} included credits`);
+                          return (
+                            <>
+                              <tr style={{ borderTop: "1px dashed var(--color-border, #444)" }}>
+                                <td>Monthly quota</td>
+                                <td className="num-col">{fmtNum(quota)}</td>
+                                <td className="muted">{noteParts.join(" + ") || "From Budgets API"}</td>
+                              </tr>
+                              <tr style={{ color: remaining >= 0 ? "var(--color-success, #3fb950)" : "var(--color-danger, #f85149)" }}>
+                                <td>Credits remaining</td>
+                                <td className="num-col">{remaining >= 0 ? fmtNum(remaining) : `−${fmtNum(Math.abs(remaining))}`}</td>
+                                <td className="muted">{pctUsed.toFixed(0)}% of quota used</td>
+                              </tr>
+                            </>
+                          );
+                        })()}
                       </tbody>
                     </table>
                   </div>

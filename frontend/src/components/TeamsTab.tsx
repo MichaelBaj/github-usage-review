@@ -500,7 +500,7 @@ export function Kpi({
 }: {
   label: string;
   value: string;
-  sub?: string;
+  sub?: React.ReactNode;
   tooltip?: string;
 }): JSX.Element {
   const [open, setOpen] = useState(false);

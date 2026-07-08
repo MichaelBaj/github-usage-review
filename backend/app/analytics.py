@@ -2149,8 +2149,10 @@ def ai_credits_summary(
     headline_qty: float | None = None
     headline_net: float | None = None
     headline_gross: float | None = None
+    headline_period = db.get_meta("ai_credit_headline_period") or ""
+    window_period = f"{end_d.year}-{end_d.month:02d}"
     raw_qty = db.get_meta("ai_credit_headline_qty")
-    if raw_qty is not None:
+    if raw_qty is not None and headline_period == window_period:
         headline_qty = float(raw_qty)
         raw_net = db.get_meta("ai_credit_headline_net_usd")
         headline_net = float(raw_net) if raw_net else None
@@ -2396,9 +2398,40 @@ def daily_org_ai_credits() -> dict[str, Any]:
     cur_label = cur_start.strftime("%b %Y")
     prev_label = prev_start.strftime("%b %Y")
 
+    # --- Budget / quota data ---
+    # Included credits: org-level AICredits rows (login='') for current month.
+    with db.connect() as conn:
+        applied_row = conn.execute(
+            "SELECT SUM(quantity) AS credits "
+            "FROM billing_usage WHERE date BETWEEN ? AND ? "
+            f"{_BILLING_MIN_DATE_SQL} "
+            "AND lower(product) LIKE '%copilot%' "
+            "AND lower(unit_type) = 'aicredits' "
+            "AND login = ''",
+            (cur_start_iso, cur_end_iso),
+        ).fetchone()
+
+    included_credits = float(applied_row["credits"] or 0) if applied_row else 0.0
+
+    budget_usd = settings.monthly_ai_budget_usd  # env fallback (0 = not set)
+    budget_credits = budget_usd / 0.01 if budget_usd > 0 else 0.0
+
+    # Total quota: budget_credits (from env or Budgets API at endpoint layer)
+    # + included_credits from billing data org-level rows.
+    if budget_credits > 0:
+        total_quota_credits: float | None = budget_credits + included_credits
+    else:
+        total_quota_credits = None  # unknown — resolved at endpoint via Budgets API
+
+    current_cumulative = _to_cumulative(cur_rows, cur_start)
+
     return {
-        "current_month": _to_cumulative(cur_rows, cur_start),
+        "current_month": current_cumulative,
         "previous_month": _to_cumulative(prev_rows, prev_start),
         "current_month_label": cur_label,
         "previous_month_label": prev_label,
+        # Budget / quota fields
+        "budget_usd": budget_usd if budget_usd > 0 else None,
+        "included_credits": round(included_credits, 2) if included_credits else None,
+        "monthly_quota_credits": round(total_quota_credits, 2) if total_quota_credits else None,
     }

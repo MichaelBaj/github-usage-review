@@ -12,46 +12,36 @@ interface Props {
   onChange: (next: WindowState) => void;
 }
 
-const PRESETS: { label: string; days: number }[] = [
-  { label: "7d", days: 7 },
-  { label: "30d", days: 30 },
-  { label: "60d", days: 60 },
-  { label: "90d", days: 90 },
-];
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+function monthStart(year: number, month: number): string {
+  return `${year}-${String(month + 1).padStart(2, "0")}-01`;
 }
 
-function isoDaysAgo(n: number): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() - n + 1);
-  return d.toISOString().slice(0, 10);
-}
-
-function firstOfMonth(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-}
-
-function lastOfMonth(): string {
-  const d = new Date();
-  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+function monthEnd(year: number, month: number): string {
+  const last = new Date(year, month + 1, 0);
   return last.toISOString().slice(0, 10);
 }
 
-/** Date-range selector with preset shortcuts and custom from/to inputs. */
+function monthPresetKey(year: number, month: number): string {
+  return `month-${year}-${String(month + 1).padStart(2, "0")}`;
+}
+
+/** Date-range selector with month buttons and custom from/to inputs. */
 export function DateRangeSelector({ value, onChange }: Props): JSX.Element {
   const [local, setLocal] = useState(value);
   useEffect(() => setLocal(value), [value]);
 
-  function applyPreset(days: number): void {
-    const next: WindowState = { days, preset: undefined, start: isoDaysAgo(days), end: todayIso() };
-    onChange(next);
-  }
+  const now = new Date();
+  const currentYear = now.getFullYear();
 
-  function applyThisMonth(): void {
-    const next: WindowState = { days: null, preset: "month", start: firstOfMonth(), end: lastOfMonth() };
+  function applyMonth(month: number): void {
+    const next: WindowState = {
+      days: null,
+      preset: monthPresetKey(currentYear, month),
+      start: monthStart(currentYear, month),
+      end: monthEnd(currentYear, month),
+    };
     onChange(next);
   }
 
@@ -62,21 +52,16 @@ export function DateRangeSelector({ value, onChange }: Props): JSX.Element {
   return (
     <div className="window-bar">
       <span className="window-label">Window:</span>
-      <button
-        className={value.preset === "month" ? "chip chip-on" : "chip"}
-        onClick={applyThisMonth}
-      >
-        This month
-      </button>
-      {PRESETS.map((p) => (
+      {MONTH_LABELS.map((label, idx) => (
         <button
-          key={p.label}
-          className={value.days === p.days && !value.preset ? "chip chip-on" : "chip"}
-          onClick={() => applyPreset(p.days)}
+          key={label}
+          className={value.preset === monthPresetKey(currentYear, idx) ? "chip chip-on" : "chip"}
+          onClick={() => applyMonth(idx)}
         >
-          {p.label}
+          {label}
         </button>
       ))}
+      <span className="window-divider">|</span>
       <input
         type="date"
         value={local.start}
@@ -100,12 +85,15 @@ export function DateRangeSelector({ value, onChange }: Props): JSX.Element {
 
 /** Convenience: build a window state for the current calendar month (default). */
 export function defaultWindowThisMonth(): WindowState {
-  return { days: null, preset: "month", start: firstOfMonth(), end: lastOfMonth() };
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  return { days: null, preset: monthPresetKey(year, month), start: monthStart(year, month), end: monthEnd(year, month) };
 }
 
 /** Convenience: build the initial window state (last N days). */
-export function defaultWindow(days = 30): WindowState {
-  return { days, start: isoDaysAgo(days), end: todayIso() };
+export function defaultWindow(_days = 30): WindowState {
+  return defaultWindowThisMonth();
 }
 
 /** Convert WindowState to the params expected by the API client. */

@@ -340,6 +340,12 @@ button:disabled {
   margin-left: auto;
 }
 
+.window-divider {
+  color: var(--border);
+  font-size: 14px;
+  margin: 0 2px;
+}
+
 .window-bar input[type="date"] {
   background: var(--bg);
   color: var(--text);

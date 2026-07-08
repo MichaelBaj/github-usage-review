@@ -5,7 +5,7 @@ import { TeamsTab } from "./components/TeamsTab";
 import { UsersTab } from "./components/UsersTab";
 import { QualityTab } from "./components/QualityTab";
 // Calendar-date versioning (YYYY-MM-DD.build)
-const VERSION = "2026-07-08.2";
+const VERSION = "2026-07-08.4";
 
 
 type Tab = "summary" | "teams" | "users" | "quality";

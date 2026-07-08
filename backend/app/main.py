@@ -290,13 +290,44 @@ def get_ai_credits_team(
 
 
 @app.get("/api/ai-credits/projection")
-def get_ai_credits_projection() -> dict[str, Any]:
+async def get_ai_credits_projection() -> dict[str, Any]:
     """Return daily cumulative AI-credit usage for the current and previous calendar months.
 
     Used by the Summary page projection chart to visualise month-over-month
-    consumption trends and aid budget forecasting.
+    consumption trends and aid budget forecasting. Includes budget quota when
+    available (from GitHub Budgets API or MONTHLY_AI_BUDGET_USD env fallback).
     """
-    return analytics.daily_org_ai_credits()
+    result = analytics.daily_org_ai_credits()
+
+    # If no quota resolved from billing data / env, try the Budgets API live.
+    if result.get("monthly_quota_credits") is None and settings.github_token:
+        try:
+            from .github_client import GitHubClient
+
+            client = GitHubClient()
+            budgets = await client.org_budgets()
+            # Find the AI-credits budget scoped to org or multi_user_customer.
+            for b in budgets:
+                sku = (b.get("budget_product_sku") or "").lower()
+                scope = (b.get("budget_scope") or "").lower()
+                if sku in ("ai_credits", "premium_requests") and scope in (
+                    "organization",
+                    "multi_user_customer",
+                    "enterprise",
+                ):
+                    budget_amount = float(b.get("budget_amount") or 0)
+                    if budget_amount > 0:
+                        budget_credits = budget_amount / 0.01
+                        included = result.get("included_credits") or 0
+                        result["budget_usd"] = budget_amount
+                        result["monthly_quota_credits"] = round(
+                            budget_credits + included, 2
+                        )
+                    break
+        except Exception:
+            log.debug("Budgets API unavailable; quota line will be absent", exc_info=True)
+
+    return result
 
 
 @app.get("/api/roi")

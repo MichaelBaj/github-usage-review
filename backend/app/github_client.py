@@ -429,6 +429,31 @@ class GitHubClient:
             page += 1
         return {"usageItems": all_items}
 
+    # ----- Budgets API -----
+
+    async def org_budgets(self) -> list[dict[str, Any]]:
+        """Fetch all budgets configured for the org.
+
+        Endpoint: ``GET /organizations/{org}/settings/billing/budgets``.
+
+        Paginates automatically. Returns the list of budget objects.
+        Requires ``admin:org`` or billing-manager role on the token.
+        """
+        all_budgets: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            response = await self._get(
+                f"/organizations/{self.org}/settings/billing/budgets",
+                params={"page": page, "per_page": 100},
+            )
+            data = response.json()
+            budgets = data.get("budgets") or []
+            all_budgets.extend(budgets)
+            if not data.get("has_next_page"):
+                break
+            page += 1
+        return all_budgets
+
     # ----- AI-credit aggregate usage (headline totals) -----
 
     async def org_ai_credit_usage(

@@ -504,6 +504,10 @@ export interface AiCreditsProjection {
   previous_month: AiCreditsProjectionPoint[];
   current_month_label: string;
   previous_month_label: string;
+  // Budget / quota fields (null when no budget configured)
+  budget_usd: number | null;
+  included_credits: number | null;
+  monthly_quota_credits: number | null;
 }
 
 async function getJson<T>(path: string): Promise<T> {
