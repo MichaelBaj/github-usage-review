@@ -1,21 +1,30 @@
 import { useEffect, useState } from "react";
-import { api, isDbExportFile, type DbImportMode, type DbImportResult, type ImportResult } from "./api";
+import {
+  api,
+  isDbExportFile,
+  type DbImportMode,
+  type DbImportResult,
+  type ImportResult,
+  type RefreshAllJob,
+} from "./api";
 import { SummaryTab } from "./components/SummaryTab";
 import { TeamsTab } from "./components/TeamsTab";
 import { UsersTab } from "./components/UsersTab";
 import { QualityTab } from "./components/QualityTab";
+import { ImportsExportsTab } from "./components/ImportsExportsTab";
 import { defaultWindowThisMonth, type WindowState } from "./components/DateRangeSelector";
 // Calendar-date versioning (YYYY-MM-DD.build)
-const VERSION = "2026-07-08.4";
+const VERSION = "2026-07-09.1";
 
 
-type Tab = "summary" | "teams" | "users" | "quality";
+type Tab = "summary" | "teams" | "users" | "quality" | "imports-exports";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "summary", label: "Summary" },
   { id: "quality", label: "Quality & Models" },
   { id: "teams", label: "Teams" },
   { id: "users", label: "Users" },
+  { id: "imports-exports", label: "Imports & Exports" },
 ];
 
 function tabFromHash(): Tab {
@@ -51,6 +60,10 @@ export function App(): JSX.Element {
   const [pendingDbFile, setPendingDbFile] = useState<File | null>(null);
   const [dbImportMode, setDbImportMode] = useState<DbImportMode>("merge");
   const [snapshotDone, setSnapshotDone] = useState<boolean | null>(null); // true=success, false=fail
+  const [refreshAllJob, setRefreshAllJob] = useState<RefreshAllJob | null>(null);
+  const [refreshAllError, setRefreshAllError] = useState<string | null>(null);
+  const [refreshAllNotice, setRefreshAllNotice] = useState<string | null>(null);
+  const [notifiedJobId, setNotifiedJobId] = useState<string | null>(null);
 
   useEffect(() => {
     const onHash = (): void => setTab(tabFromHash());
@@ -70,6 +83,53 @@ export function App(): JSX.Element {
       }),
     ).catch(() => undefined);
   }, [dataVersion]);
+
+  useEffect(() => {
+    let disposed = false;
+    const poll = async (): Promise<void> => {
+      try {
+        const job = await api.refreshAllStatus(refreshAllJob?.id);
+        if (disposed) return;
+        setRefreshAllJob(job);
+        if (
+          (
+            job.status === "completed"
+            || job.status === "completed_with_errors"
+            || job.status === "failed"
+            || job.status === "canceled"
+          )
+          && notifiedJobId !== job.id
+        ) {
+          setNotifiedJobId(job.id);
+          if (job.status === "completed") {
+            setRefreshAllNotice("Refresh all data completed.");
+          } else if (job.status === "completed_with_errors") {
+            setRefreshAllNotice("Refresh all data completed with errors.");
+          } else if (job.status === "canceled") {
+            setRefreshAllNotice("Refresh all data canceled.");
+          } else {
+            setRefreshAllNotice("Refresh all data failed.");
+          }
+          setDataVersion((value) => value + 1);
+        }
+      } catch {
+        // No active/known job yet.
+      }
+    };
+    void poll();
+    if (!refreshAllJob?.id) {
+      return () => {
+        disposed = true;
+      };
+    }
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 5000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [refreshAllJob?.id, notifiedJobId]);
 
   function go(next: Tab): void {
     window.location.hash = next;
@@ -151,6 +211,47 @@ export function App(): JSX.Element {
     }
   }
 
+  async function startRefreshAllData(): Promise<void> {
+    setRefreshAllError(null);
+    try {
+      const payload = await api.startRefreshAll({ report_types: ["ai_credit", "detailed"] });
+      setRefreshAllJob(payload.job);
+      if (payload.started) {
+        setRefreshAllNotice("Refresh all data started in background.");
+      }
+    } catch (e) {
+      setRefreshAllError((e as Error).message);
+    }
+  }
+
+  async function cancelRefreshAllData(): Promise<void> {
+    setRefreshAllError(null);
+    try {
+      const payload = await api.cancelRefreshAll(refreshAllJob?.id);
+      setRefreshAllNotice(`Refresh all cancel requested (${payload.job_id}).`);
+    } catch (e) {
+      setRefreshAllError((e as Error).message);
+    }
+  }
+
+  async function retryRefreshAllData(): Promise<void> {
+    setRefreshAllError(null);
+    try {
+      const payload = await api.retryRefreshAll({ job_id: refreshAllJob?.id });
+      setRefreshAllJob(payload.job);
+      setRefreshAllNotice("Refresh all data retried in background.");
+    } catch (e) {
+      setRefreshAllError((e as Error).message);
+    }
+  }
+
+  function handleUsageReportImported(result: ImportResult): void {
+    setError(null);
+    setDbImportResult(null);
+    setImportResult(result);
+    setDataVersion((value) => value + 1);
+  }
+
   const apiLabel = lastLoad.apiAt ? lastLoad.apiAt : "never";
   const csvLabel = lastLoad.csvAt ? lastLoad.csvAt : "never";
   const jsonLabel = lastLoad.jsonAt ? lastLoad.jsonAt : "never";
@@ -162,9 +263,6 @@ export function App(): JSX.Element {
           <h1>Copilot Usage Review</h1>
           <table className="meta-table">
             <tbody>
-              <tr><td>Last data load: API:</td><td>{apiLabel}</td></tr>
-              <tr><td>Last data load: CSV:</td><td>{csvLabel}</td></tr>
-              <tr><td>Last data load: JSON:</td><td>{jsonLabel}</td></tr>
               <tr><td>Version:</td><td>{VERSION}</td></tr>
               {lastLoad.historyDays != null ? (
                 <tr><td>History collected:</td><td>{lastLoad.historyDays} days</td></tr>
@@ -172,26 +270,11 @@ export function App(): JSX.Element {
             </tbody>
           </table>
         </div>
-        <div className="header-actions">
-          <button onClick={refresh} disabled={refreshing || importing} className={snapshotDone === true ? "btn-success" : undefined}>
-            {refreshing ? "Refreshing…" : snapshotDone === true ? "\u2713 Snapshot complete" : "Refresh snapshot"}
+        {refreshAllJob ? (
+          <button className="refresh-chip" onClick={() => go("imports-exports")}>
+            Refresh All: {refreshAllJob.status}
           </button>
-          <button onClick={exportData} disabled={exporting || importing || refreshing}>
-            {exporting ? "Exporting…" : "Export data"}
-          </button>
-          <label className={importing || refreshing ? "upload-button upload-disabled" : "upload-button"}>
-            {importing ? "Importing…" : "Import file"}
-            <input
-              type="file"
-              accept=".json,.jsonl,.ndjson,.csv,.db,.sqlite,.sqlite3,.gz,application/json,text/csv,application/csv,application/vnd.ms-excel,application/gzip,application/x-sqlite3"
-              disabled={importing || refreshing}
-              onChange={(event) => {
-                void importUsage(event.target.files?.[0]);
-                event.currentTarget.value = "";
-              }}
-            />
-          </label>
-        </div>
+        ) : null}
       </div>
 
       <div className="tabs">
@@ -206,22 +289,9 @@ export function App(): JSX.Element {
         ))}
       </div>
 
-      {refreshing ? <div className="snapshot-progress"><div className="snapshot-progress-bar" /></div> : null}
-      {error ? <div className="error">{error}</div> : null}
-      {importResult ? (
-        <div className="import-note" title={importResult.warnings.join("\n") || undefined}>
-          Imported {importResult.rows_imported} rows from {importResult.source_type}
-          {importResult.date_range
-            ? ` (${importResult.date_range.start} to ${importResult.date_range.end})`
-            : ""}
-          {importResult.skipped_rows ? `; skipped ${importResult.skipped_rows}` : ""}
-          {importResult.warnings.length ? `; ${importResult.warnings.length} warning(s)` : ""}
-        </div>
-      ) : null}
-      {dbImportResult ? (
-        <div className="import-note">
-          Database import ({dbImportResult.mode}): {dbImportResult.rows_total} rows across{" "}
-          {dbImportResult.tables_imported} table(s)
+      {refreshAllNotice ? (
+        <div className="global-notice" onClick={() => setRefreshAllNotice(null)} role="status">
+          {refreshAllNotice}
         </div>
       ) : null}
 
@@ -229,6 +299,31 @@ export function App(): JSX.Element {
       {tab === "teams" ? <TeamsTab key={`teams-${dataVersion}`} win={win} onWinChange={setWin} /> : null}
       {tab === "users" ? <UsersTab key={`users-${dataVersion}`} win={win} onWinChange={setWin} /> : null}
       {tab === "quality" ? <QualityTab key={`quality-${dataVersion}`} win={win} onWinChange={setWin} /> : null}
+      {tab === "imports-exports" ? (
+        <ImportsExportsTab
+          apiLabel={apiLabel}
+          csvLabel={csvLabel}
+          jsonLabel={jsonLabel}
+          csvSource={lastLoad.csvSource}
+          jsonSource={lastLoad.jsonSource}
+          refreshing={refreshing}
+          importing={importing}
+          exporting={exporting}
+          snapshotDone={snapshotDone}
+          error={error}
+          importResult={importResult}
+          dbImportResult={dbImportResult}
+          onRefresh={refresh}
+          onExport={exportData}
+          onImport={importUsage}
+          onUsageReportImported={handleUsageReportImported}
+          refreshAllJob={refreshAllJob}
+          refreshAllError={refreshAllError}
+          onStartRefreshAll={startRefreshAllData}
+          onCancelRefreshAll={cancelRefreshAllData}
+          onRetryRefreshAll={retryRefreshAllData}
+        />
+      ) : null}
 
       {pendingDbFile ? (
         <div className="modal-overlay" onClick={() => setPendingDbFile(null)}>

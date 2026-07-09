@@ -90,6 +90,12 @@ class GitHubClient:
         response.raise_for_status()
         return response
 
+    async def _post(self, path: str, json_body: dict[str, Any] | None = None) -> httpx.Response:
+        """Issue a POST; raises on non-2xx."""
+        response = await self._client.post(path, json=json_body)
+        response.raise_for_status()
+        return response
+
     async def _paginate(
         self, path: str, params: dict[str, Any] | None = None
     ) -> AsyncIterator[dict[str, Any]]:
@@ -155,6 +161,64 @@ class GitHubClient:
             "to refresh CA certificates."
         ) from last_exc
 
+    @staticmethod
+    def _report_meta_or_empty(response: httpx.Response) -> dict[str, Any]:
+        """Parse report metadata JSON, tolerating 204/no-body responses."""
+        if response.status_code == 204:
+            return {}
+        if not (response.text or "").strip():
+            return {}
+        return response.json()
+
+    # ----- Enterprise usage-report exports (asynchronous) -----
+
+    async def list_usage_report_exports(self) -> list[dict[str, Any]]:
+        """List enterprise usage-report exports newest-first when available."""
+        if not self.enterprise:
+            raise RuntimeError("github_enterprise is not configured")
+        response = await self._get(
+            f"/enterprises/{self.enterprise}/settings/billing/reports"
+        )
+        payload = response.json()
+        rows = payload.get("usage_report_exports") or []
+        if isinstance(rows, list):
+            return rows
+        return []
+
+    async def create_usage_report_export(
+        self,
+        report_type: str,
+        start_date: str,
+        end_date: str,
+        send_email: bool = False,
+    ) -> dict[str, Any]:
+        """Create an asynchronous enterprise usage-report export job."""
+        if not self.enterprise:
+            raise RuntimeError("github_enterprise is not configured")
+        response = await self._post(
+            f"/enterprises/{self.enterprise}/settings/billing/reports",
+            json_body={
+                "report_type": report_type,
+                "start_date": start_date,
+                "end_date": end_date,
+                "send_email": send_email,
+            },
+        )
+        return response.json()
+
+    async def get_usage_report_export(self, report_id: str) -> dict[str, Any]:
+        """Return details for a specific usage-report export job."""
+        if not self.enterprise:
+            raise RuntimeError("github_enterprise is not configured")
+        response = await self._get(
+            f"/enterprises/{self.enterprise}/settings/billing/reports/{report_id}"
+        )
+        return response.json()
+
+    async def download_usage_report(self, download_url: str) -> str:
+        """Download report content from a signed usage-report URL as text."""
+        return await self._download_report(download_url)
+
     async def org_metrics_report(self) -> dict[str, Any]:
         """Return the latest 28-day org metrics report (new API).
 
@@ -173,7 +237,33 @@ class GitHubClient:
                 )
             else:
                 raise
-        meta = resp.json()
+        meta = self._report_meta_or_empty(resp)
+        links = meta.get("download_links") or []
+        if not links:
+            return {"day_totals": []}
+        text = await self._download_report(links[0])
+        report = json.loads(text)
+        return report
+
+    async def org_metrics_1day_report(self, day: str) -> dict[str, Any]:
+        """Return org metrics report for a specific day (YYYY-MM-DD).
+
+        Falls back to enterprise scope on 404.
+        """
+        try:
+            resp = await self._get_report(
+                f"/orgs/{self.org}/copilot/metrics/reports/organization-1-day",
+                params={"day": day},
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404 and self.enterprise:
+                resp = await self._get_report(
+                    f"/enterprises/{self.enterprise}/copilot/metrics/reports/enterprise-1-day",
+                    params={"day": day},
+                )
+            else:
+                raise
+        meta = self._report_meta_or_empty(resp)
         links = meta.get("download_links") or []
         if not links:
             return {"day_totals": []}
@@ -206,7 +296,7 @@ class GitHubClient:
                 return []
             else:
                 raise
-        meta = resp.json()
+        meta = self._report_meta_or_empty(resp)
         links = meta.get("download_links") or []
         if not links:
             return []
@@ -238,7 +328,7 @@ class GitHubClient:
                 return []
             else:
                 raise
-        meta = resp.json()
+        meta = self._report_meta_or_empty(resp)
         links = meta.get("download_links") or []
         if not links:
             return []

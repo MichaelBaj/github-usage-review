@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -525,45 +525,78 @@ async def _ingest_billing_usage(gh: GitHubClient) -> dict[str, Any]:
     (older tiers / disabled plans).
     """
     summary: dict[str, Any] = {"rows": 0}
-    now = datetime.now(UTC)
-    year, month = now.year, now.month
+    today = datetime.now(UTC).date()
 
-    try:
-        payload = await asyncio.wait_for(
-            gh.org_billing_usage(year=year, month=month),
-            timeout=60.0,
-        )
-    except asyncio.TimeoutError:
-        log.warning("org billing usage timed out for %d-%02d", year, month)
-        summary["error"] = "timeout"
-        return summary
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404 and gh.enterprise:
-            try:
-                payload = await asyncio.wait_for(
-                    gh.enterprise_billing_usage(year=year, month=month),
-                    timeout=60.0,
-                )
-            except (httpx.HTTPStatusError, asyncio.TimeoutError) as exc2:
-                log.warning("enterprise billing usage failed for %d-%02d: %s", year, month, exc2)
-                summary["error"] = str(exc2)
-                return summary
-        elif exc.response.status_code in (403, 404):
-            log.warning(
-                "org billing usage failed (%s) for %d-%02d; enhanced billing API may be "
-                "unavailable on this org tier.",
-                exc.response.status_code, year, month,
+    # Incremental-only strategy: fetch from latest stored day with 1-day overlap
+    # to catch delayed corrections, instead of scanning full month every run.
+    start_day = today.replace(day=1)
+    latest_stored = db.get_latest_billing_usage_date()
+    if latest_stored:
+        try:
+            latest_day = date.fromisoformat(latest_stored)
+            start_day = max(start_day, latest_day - timedelta(days=1))
+        except ValueError:
+            pass
+
+    rows: list[dict[str, Any]] = []
+    day_cursor = start_day
+    day_calls = 0
+    while day_cursor <= today:
+        year = day_cursor.year
+        month = day_cursor.month
+        day = day_cursor.day
+        day_calls += 1
+        try:
+            payload = await asyncio.wait_for(
+                gh.org_billing_usage(year=year, month=month, day=day),
+                timeout=60.0,
             )
-            summary["error"] = str(exc.response.status_code)
+        except asyncio.TimeoutError:
+            log.warning("org billing usage timed out for %04d-%02d-%02d", year, month, day)
+            summary["error"] = "timeout"
             return summary
-        else:
-            raise
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404 and gh.enterprise:
+                try:
+                    payload = await asyncio.wait_for(
+                        gh.enterprise_billing_usage(year=year, month=month, day=day),
+                        timeout=60.0,
+                    )
+                except (httpx.HTTPStatusError, asyncio.TimeoutError) as exc2:
+                    log.warning(
+                        "enterprise billing usage failed for %04d-%02d-%02d: %s",
+                        year,
+                        month,
+                        day,
+                        exc2,
+                    )
+                    summary["error"] = str(exc2)
+                    return summary
+            elif exc.response.status_code in (403, 404):
+                log.warning(
+                    "org billing usage failed (%s) for %04d-%02d-%02d; enhanced billing API may be "
+                    "unavailable on this org tier.",
+                    exc.response.status_code,
+                    year,
+                    month,
+                    day,
+                )
+                summary["error"] = str(exc.response.status_code)
+                return summary
+            else:
+                raise
 
-    rows = _flatten_billing_usage(payload)
+        rows.extend(_flatten_billing_usage(payload))
+        day_cursor += timedelta(days=1)
+
     if rows:
         db.upsert_billing_usage(rows)
+        db.set_meta("billing_usage_last_synced_day", today.isoformat())
     summary["rows"] = len(rows)
     summary["copilot_rows"] = sum(1 for r in rows if "copilot" in (r["product"] or "").lower())
+    summary["days_requested"] = day_calls
+    summary["start_day"] = start_day.isoformat()
+    summary["end_day"] = today.isoformat()
     return summary
 
 
@@ -654,10 +687,32 @@ async def run_snapshot() -> dict[str, Any]:
     async with GitHubClient() as gh:
         # --- Org metrics via report-download API ---
         report_days: list[dict[str, Any]] = []
+        latest_local_day = db.get_latest_org_metrics_date()
         try:
-            report = await gh.org_metrics_report()
-            report_days = report.get("day_totals") or []
-            summary["metrics_api"] = "report"
+            if not latest_local_day:
+                report = await gh.org_metrics_report()
+                report_days = report.get("day_totals") or []
+                summary["metrics_api"] = "report-28d"
+            else:
+                today = datetime.now(UTC).date()
+                try:
+                    latest_day = date.fromisoformat(latest_local_day)
+                except ValueError:
+                    latest_day = today - timedelta(days=1)
+
+                # Request only new/possibly adjusted data with 1-day overlap.
+                start_day = max(today - timedelta(days=2), latest_day - timedelta(days=1))
+                per_day_rows: list[dict[str, Any]] = []
+                cursor = start_day
+                while cursor <= today:
+                    day_str = cursor.isoformat()
+                    one_day = await gh.org_metrics_1day_report(day_str)
+                    per_day_rows.extend(one_day.get("day_totals") or [])
+                    cursor += timedelta(days=1)
+                report_days = per_day_rows
+                summary["metrics_api"] = "report-1d-incremental"
+                summary["metrics_requested_start"] = start_day.isoformat()
+                summary["metrics_requested_end"] = today.isoformat()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 log.warning(
@@ -670,20 +725,20 @@ async def run_snapshot() -> dict[str, Any]:
                 raise
 
         for day in report_days:
-            date = day.get("day")
-            if not date:
+            day_key = day.get("day")
+            if not day_key:
                 continue
             raw = _report_day_to_raw_json(day)
             db.upsert_org_day(
-                date,
+                day_key,
                 day.get("daily_active_users"),
                 None,  # total_engaged_users not in report format
                 raw,
             )
-            db.replace_language_rows(date, _report_flatten_languages(day))
-            db.replace_editor_rows(date, _report_flatten_editors(day))
-            db.replace_model_rows(date, "org", "", _report_flatten_models(day))
-            db.replace_feature_rows(date, _report_flatten_features(day))
+            db.replace_language_rows(day_key, _report_flatten_languages(day))
+            db.replace_editor_rows(day_key, _report_flatten_editors(day))
+            db.replace_model_rows(day_key, "org", "", _report_flatten_models(day))
+            db.replace_feature_rows(day_key, _report_flatten_features(day))
         summary["org_days"] = len(report_days)
 
         # --- Per-user and user-teams reports for team derivation ---
@@ -710,27 +765,39 @@ async def run_snapshot() -> dict[str, Any]:
                     summary["user_teams_error"] = str(exc.response.status_code)
 
         # --- Also fetch teams list for any additional membership data ---
+        # Full team-member crawl can be expensive on large orgs, so run it
+        # at most once per UTC day. User-teams report above still refreshes
+        # recent active users on each snapshot.
         teams: list[dict[str, Any]] = []
-        try:
-            teams = await gh.list_teams()
-        except httpx.HTTPStatusError as exc:
-            log.warning(
-                "list_teams failed (%s); skipping team member sync. "
-                "Token likely lacks read:org scope or SSO authorization.",
-                exc.response.status_code,
-            )
-            summary["teams_error"] = str(exc.response.status_code)
-
-        for team in teams:
-            slug = team.get("slug")
-            if not slug:
-                continue
+        full_team_sync_day = db.get_meta("full_team_sync_day")
+        today_utc = datetime.now(UTC).date().isoformat()
+        do_full_team_sync = full_team_sync_day != today_utc
+        if do_full_team_sync:
             try:
-                members = await gh.list_team_members(slug)
-                db.replace_team_members(slug, [m.get("login") for m in members if m.get("login")])
+                teams = await gh.list_teams()
             except httpx.HTTPStatusError as exc:
-                log.info("list_team_members skip %s: %s", slug, exc.response.status_code)
-        summary["teams_total"] = len(teams)
+                log.warning(
+                    "list_teams failed (%s); skipping team member sync. "
+                    "Token likely lacks read:org scope or SSO authorization.",
+                    exc.response.status_code,
+                )
+                summary["teams_error"] = str(exc.response.status_code)
+
+            for team in teams:
+                slug = team.get("slug")
+                if not slug:
+                    continue
+                try:
+                    members = await gh.list_team_members(slug)
+                    db.replace_team_members(slug, [m.get("login") for m in members if m.get("login")])
+                except httpx.HTTPStatusError as exc:
+                    log.info("list_team_members skip %s: %s", slug, exc.response.status_code)
+            if teams:
+                db.set_meta("full_team_sync_day", today_utc)
+            summary["teams_total"] = len(teams)
+        else:
+            summary["teams_total"] = 0
+            summary["teams_sync"] = "skipped (already synced today)"
 
         try:
             seats_raw = await gh.list_seats()

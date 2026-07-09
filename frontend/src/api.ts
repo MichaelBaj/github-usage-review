@@ -66,6 +66,80 @@ export interface DbImportResult {
   tables: Record<string, number>;
 }
 
+export type UsageReportType = "detailed" | "summarized" | "premium_request" | "ai_credit";
+
+export interface UsageReportExport {
+  id: string;
+  report_type: UsageReportType;
+  start_date: string;
+  end_date: string;
+  status: "processing" | "completed" | "failed";
+  download_urls?: string[];
+  created_at?: string;
+  actor?: string;
+}
+
+export interface UsageReportListResponse {
+  enterprise: string;
+  exports: UsageReportExport[];
+}
+
+export interface UsageReportCreateRequest {
+  report_type: UsageReportType;
+  start_date: string;
+  end_date: string;
+  send_email?: boolean;
+}
+
+export interface UsageReportImportResponse {
+  report_id: string;
+  report_type: string;
+  start_date: string;
+  end_date: string;
+  status: string;
+  import: ImportResult;
+}
+
+export interface RefreshAllStep {
+  key: string;
+  label: string;
+  status: "pending" | "running" | "completed" | "failed";
+  message: string;
+  updated_at: string;
+  meta?: Record<string, unknown>;
+}
+
+export interface RefreshAllJob {
+  id: string;
+  status: "pending" | "running" | "completed" | "completed_with_errors" | "failed" | "canceled";
+  started_at: string | null;
+  finished_at: string | null;
+  report_types: string[];
+  send_email: boolean;
+  created_at: string;
+  errors: string[];
+  steps: RefreshAllStep[];
+}
+
+export interface RefreshAllStartRequest {
+  report_types?: UsageReportType[];
+  send_email?: boolean;
+}
+
+export interface RefreshAllStartResponse {
+  started: boolean;
+  job: RefreshAllJob;
+}
+
+export interface RefreshAllCancelResponse {
+  canceled: boolean;
+  job_id: string;
+}
+
+export interface RefreshAllRetryRequest {
+  job_id?: string;
+}
+
 export interface TrendPoint {
   date: string;
   active_users: number;
@@ -609,6 +683,125 @@ export const api = {
       throw new Error(`database import failed: ${detail}`);
     }
     return (await r.json()) as DbImportResult;
+  },
+  listUsageReports: () => getJson<UsageReportListResponse>("/api/usage-reports"),
+  createUsageReport: async (req: UsageReportCreateRequest): Promise<UsageReportExport> => {
+    const r = await fetch("/api/usage-reports", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!r.ok) {
+      let detail = `${r.status} ${r.statusText}`;
+      try {
+        const payload = (await r.json()) as { detail?: string };
+        detail = payload.detail ?? detail;
+      } catch {
+        // Keep the HTTP status fallback.
+      }
+      throw new Error(`create usage report failed: ${detail}`);
+    }
+    return (await r.json()) as UsageReportExport;
+  },
+  getUsageReport: (reportId: string) =>
+    getJson<UsageReportExport>(`/api/usage-reports/${encodeURIComponent(reportId)}`),
+  downloadUsageReport: async (reportId: string): Promise<void> => {
+    const r = await fetch(`/api/usage-reports/${encodeURIComponent(reportId)}/download`);
+    if (!r.ok) {
+      let detail = `${r.status} ${r.statusText}`;
+      try {
+        const payload = (await r.json()) as { detail?: string };
+        detail = payload.detail ?? detail;
+      } catch {
+        // Keep the HTTP status fallback.
+      }
+      throw new Error(`usage report download failed: ${detail}`);
+    }
+    const blob = await r.blob();
+    const disposition = r.headers.get("Content-Disposition") ?? "";
+    const match = /filename="?([^\"]+)"?/.exec(disposition);
+    const filename = match?.[1] ?? "usage-report.csv";
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  },
+  importUsageReport: async (reportId: string): Promise<UsageReportImportResponse> => {
+    const r = await fetch(`/api/usage-reports/${encodeURIComponent(reportId)}/import`, {
+      method: "POST",
+    });
+    if (!r.ok) {
+      let detail = `${r.status} ${r.statusText}`;
+      try {
+        const payload = (await r.json()) as { detail?: string };
+        detail = payload.detail ?? detail;
+      } catch {
+        // Keep the HTTP status fallback.
+      }
+      throw new Error(`usage report import failed: ${detail}`);
+    }
+    return (await r.json()) as UsageReportImportResponse;
+  },
+  startRefreshAll: async (req: RefreshAllStartRequest = {}): Promise<RefreshAllStartResponse> => {
+    const r = await fetch("/api/refresh-all/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!r.ok) {
+      let detail = `${r.status} ${r.statusText}`;
+      try {
+        const payload = (await r.json()) as { detail?: string };
+        detail = payload.detail ?? detail;
+      } catch {
+        // Keep the HTTP status fallback.
+      }
+      throw new Error(`refresh-all start failed: ${detail}`);
+    }
+    return (await r.json()) as RefreshAllStartResponse;
+  },
+  refreshAllStatus: async (jobId?: string): Promise<RefreshAllJob> => {
+    const path = jobId
+      ? `/api/refresh-all/status/${encodeURIComponent(jobId)}`
+      : "/api/refresh-all/status";
+    return getJson<RefreshAllJob>(path);
+  },
+  cancelRefreshAll: async (jobId?: string): Promise<RefreshAllCancelResponse> => {
+    const suffix = jobId ? `?job_id=${encodeURIComponent(jobId)}` : "";
+    const r = await fetch(`/api/refresh-all/cancel${suffix}`, { method: "POST" });
+    if (!r.ok) {
+      let detail = `${r.status} ${r.statusText}`;
+      try {
+        const payload = (await r.json()) as { detail?: string };
+        detail = payload.detail ?? detail;
+      } catch {
+        // Keep the HTTP status fallback.
+      }
+      throw new Error(`refresh-all cancel failed: ${detail}`);
+    }
+    return (await r.json()) as RefreshAllCancelResponse;
+  },
+  retryRefreshAll: async (req?: RefreshAllRetryRequest): Promise<RefreshAllStartResponse> => {
+    const r = await fetch("/api/refresh-all/retry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req ?? {}),
+    });
+    if (!r.ok) {
+      let detail = `${r.status} ${r.statusText}`;
+      try {
+        const payload = (await r.json()) as { detail?: string };
+        detail = payload.detail ?? detail;
+      } catch {
+        // Keep the HTTP status fallback.
+      }
+      throw new Error(`refresh-all retry failed: ${detail}`);
+    }
+    return (await r.json()) as RefreshAllStartResponse;
   },
 };
 

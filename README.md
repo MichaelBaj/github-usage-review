@@ -18,6 +18,28 @@ leaderboards, and 90-day projections.
     (for per-user AI-credit rollups via the enhanced-billing API)
 - Org admin role on the target GitHub organization
 
+### Enterprise Usage-Reports API Access (Required for "Enterprise Usage Reports" tab controls)
+
+When this README says "enterprise API access is enabled", it means all of the following are true:
+
+1. The enterprise supports and has enabled REST usage-report exports at
+  `/enterprises/{enterprise}/settings/billing/reports`.
+2. The signed-in GitHub account is an **enterprise owner** or
+  **enterprise billing manager**.
+3. `GITHUB_ENTERPRISE` is set to the correct enterprise slug.
+4. `GITHUB_TOKEN` has enterprise billing permissions.
+
+For this app, use a **classic PAT** (recommended) with at least:
+
+- `manage_billing:enterprise` (required for enterprise usage-report export creation/list/get)
+- `manage_billing:copilot` (Copilot metrics + Copilot billing endpoints)
+- `read:enterprise` (enterprise-level read APIs)
+- `read:org` (org teams/members)
+- `repo` (if PR ingestion is enabled)
+
+If the API returns `403` or `404` from the usage-reports endpoints, check role,
+enterprise slug, plan/feature availability, and token scopes above.
+
 ## Quick Start
 
 ```bash
@@ -240,6 +262,11 @@ All windowed endpoints accept either `?days=N` **or** an explicit
 | POST | `/api/data/import-file` | Multipart upload for local `.json`, `.jsonl`, `.ndjson`, or `.csv` Copilot usage/billing imports |
 | GET | `/api/data/export` | Download the entire database as one gzip-compressed SQLite file |
 | POST | `/api/data/import-db` | Multipart upload of a database export; `?mode=replace\|merge` |
+| GET | `/api/usage-reports` | List enterprise usage-report export jobs |
+| POST | `/api/usage-reports` | Create enterprise usage-report export job |
+| GET | `/api/usage-reports/{report_id}` | Get one usage-report export job |
+| GET | `/api/usage-reports/{report_id}/download` | Download completed usage-report CSV |
+| POST | `/api/usage-reports/{report_id}/import` | Download + import completed usage-report CSV into billing data |
 
 ### Import Endpoint
 
@@ -428,11 +455,3 @@ agent customization framework. Routing files live under `.github/`,
 ## License
 
 Internal — Juniper Networks.
-
----
-
-**Version:** 2026-06-24
-
-History collected:
-- 2026-06-24: Data reset script, version tracking added; seat filtering, PR activity reorganization, AI-credits rendering fixes
-- 2026-06-04: Last comprehensive review

@@ -306,6 +306,26 @@ def get_meta(key: str) -> str | None:
         return row["value"] if row else None
 
 
+def get_latest_billing_usage_date() -> str | None:
+    """Return latest billing_usage date present in storage, if any."""
+    with connect() as conn:
+        row = conn.execute("SELECT MAX(date) AS max_date FROM billing_usage").fetchone()
+        if not row:
+            return None
+        value = row["max_date"]
+        return str(value) if value else None
+
+
+def get_latest_org_metrics_date() -> str | None:
+    """Return latest org metrics day present in storage, if any."""
+    with connect() as conn:
+        row = conn.execute("SELECT MAX(date) AS max_date FROM daily_org_metrics").fetchone()
+        if not row:
+            return None
+        value = row["max_date"]
+        return str(value) if value else None
+
+
 def upsert_org_day(
     date: str,
     total_active: int | None,
