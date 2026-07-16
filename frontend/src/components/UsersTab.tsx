@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type UserDetail, type UserRow } from "../api";
-import { defaultWindow, DateRangeSelector, toWindowParams, type WindowState } from "./DateRangeSelector";
+import { DateRangeSelector, toWindowParams, type WindowState } from "./DateRangeSelector";
 import { fmtMoney, fmtNum, Kpi } from "./TeamsTab";
 import {
   BarChart,
@@ -18,8 +18,7 @@ type StatusFilter = "all" | "active" | "stale" | "never_used";
 type SortCol = "login" | "status" | "prs" | "net_lines" | "ai_credits";
 type SortDir = "asc" | "desc";
 
-export function UsersTab(): JSX.Element {
-  const [win, setWin] = useState<WindowState>(defaultWindow(30));
+export function UsersTab({ win, onWinChange }: { win: WindowState; onWinChange: (w: WindowState) => void }): JSX.Element {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [query, setQuery] = useState("");
@@ -67,6 +66,8 @@ export function UsersTab(): JSX.Element {
     return sortDir === "asc" ? cmp : -cmp;
   });
 
+  const creditDataAvailable = users.some((u) => u.ai_credits > 0);
+
   function toggleSort(col: SortCol): void {
     if (sortCol === col) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -83,11 +84,12 @@ export function UsersTab(): JSX.Element {
 
   return (
     <div>
-      <DateRangeSelector value={win} onChange={setWin} />
+      <DateRangeSelector value={win} onChange={onWinChange} />
       <div className="panel">
         <div className="muted" style={{ marginBottom: 8 }}>
           <strong>Note:</strong> GitHub does not expose per-user Copilot acceptance/model/language metrics.
           The list below shows seat lifecycle + PR activity per user as the best available per-user signal.
+          Import a billing CSV covering this period to see AI credit attribution.
         </div>
         <div className="filter-bar">
           <input
@@ -114,7 +116,7 @@ export function UsersTab(): JSX.Element {
       {error ? <div className="error">{error}</div> : null}
 
       <div className="split">
-        <div className="panel" style={{ minWidth: 340 }}>
+        <div className="panel" style={{ width: 560, flex: "0 0 auto", overflowX: "auto" }}>
           <table>
             <thead>
               <tr>
@@ -142,13 +144,13 @@ export function UsersTab(): JSX.Element {
                   </td>
                   <td>{u.prs}</td>
                   <td>{u.net_lines.toLocaleString()}</td>
-                  <td>{fmtNum(u.ai_credits)}</td>
+                  <td>{creditDataAvailable ? fmtNum(u.ai_credits) : <span className="muted">—</span>}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           {detail ? <UserDetailView detail={detail} /> : <div className="loading">Loading…</div>}
         </div>
       </div>
@@ -220,11 +222,11 @@ function UserDetailView({ detail }: { detail: UserDetail }): JSX.Element {
           />
           <Kpi
             label="AI credits"
-            value={fmtNum(detail.totals.ai_credits)}
-            sub={fmtMoney(detail.totals.ai_credit_cost_usd)}
+            value={detail.ai_credits.credit_data_available ? fmtNum(detail.totals.ai_credits) : "—"}
+            sub={detail.ai_credits.credit_data_available ? fmtMoney(detail.totals.ai_credit_cost_usd) : "No billing data for this window"}
             tooltip={
               "Sum of AI-credit quantity attributed to this user in the window " +
-              "(enhanced-billing API). Sub-value is sum of net_amount_usd."
+              "(enhanced-billing API). Import a billing CSV covering this period to see data."
             }
           />
         </div>
@@ -232,6 +234,12 @@ function UserDetailView({ detail }: { detail: UserDetail }): JSX.Element {
 
       <div className="panel">
         <h2>AI Credit Usage (Billing-Derived)</h2>
+        {!detail.ai_credits.credit_data_available ? (
+          <div className="muted" style={{ marginBottom: 8, padding: "8px 12px", background: "var(--bg-secondary)", borderRadius: 6 }}>
+            No per-user billing data available for this window ({detail.ai_credits.window_start} → {detail.ai_credits.window_end}).
+            Import a billing CSV covering this period to see AI credit attribution.
+          </div>
+        ) : null}
         <div className="muted" style={{ marginBottom: 8 }}>
           <strong>Tokens:</strong> {detail.ai_credits.tokens_note}
         </div>

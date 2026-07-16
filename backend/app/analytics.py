@@ -244,6 +244,11 @@ def kpis(
         "last_snapshot_at": db.get_meta("last_snapshot_at"),
         "last_data_load_at": db.get_meta("last_data_load_at"),
         "last_data_load_source": db.get_meta("last_data_load_source"),
+        "last_api_load_at": db.get_meta("last_api_load_at"),
+        "last_csv_load_at": db.get_meta("last_csv_load_at"),
+        "last_csv_load_source": db.get_meta("last_csv_load_source"),
+        "last_json_load_at": db.get_meta("last_json_load_at"),
+        "last_json_load_source": db.get_meta("last_json_load_source"),
     }
 
 
@@ -314,26 +319,26 @@ def _team_member_rollup(
                     "deletions": row["dels"] or 0,
                 }
             for row in conn.execute(
-                f"SELECT login, SUM(quantity) AS qty FROM billing_usage "
+                f"SELECT lower(login) AS login, SUM(quantity) AS qty FROM billing_usage "
                 f"WHERE date BETWEEN ? AND ? AND lower(product) LIKE '%copilot%' "
                 f"{_BILLING_MIN_DATE_SQL} "
                 f"AND {_COPILOT_BILLABLE_SKU_SQL} "
                 f"{_billing_dedup_sql(conn, start_iso, end_iso)} "
-                f"AND lower(login) IN ({lower_placeholders}) GROUP BY login",
+                f"AND lower(login) IN ({lower_placeholders}) GROUP BY lower(login)",
                 (start_iso, end_iso, *ordered_lower),
             ).fetchall():
-                canonical = lower_map.get((row["login"] or "").lower(), row["login"])
+                canonical = lower_map.get(row["login"] or "", row["login"])
                 premium_by_login[canonical] = float(row["qty"] or 0)
             for row in conn.execute(
-                f"SELECT login, SUM(net_amount_usd) AS net FROM billing_usage "
+                f"SELECT lower(login) AS login, SUM(net_amount_usd) AS net FROM billing_usage "
                 f"WHERE date BETWEEN ? AND ? AND lower(product) LIKE '%copilot%' "
                 f"{_BILLING_MIN_DATE_SQL} "
                 f"AND {_COPILOT_BILLABLE_SKU_SQL} "
                 f"{_billing_dedup_sql(conn, start_iso, end_iso)} "
-                f"AND lower(login) IN ({lower_placeholders}) GROUP BY login",
+                f"AND lower(login) IN ({lower_placeholders}) GROUP BY lower(login)",
                 (start_iso, end_iso, *ordered_lower),
             ).fetchall():
-                canonical = lower_map.get((row["login"] or "").lower(), row["login"])
+                canonical = lower_map.get(row["login"] or "", row["login"])
                 cost_by_login[canonical] = round(float(row["net"] or 0), 2)
 
     rows_out: list[dict[str, Any]] = []
@@ -478,6 +483,7 @@ def teams_leaderboard(
                 "never_used_members": summary["never_used_members"],
                 "adoption_rate": summary["adoption_rate"],
                 "ai_credits": summary["ai_credits"],
+                "credit_data_available": summary["ai_credits"] > 0 or summary["window_cost_usd"] > 0,
                 "window_cost_usd": summary["window_cost_usd"],
                 "prs": summary["prs"],
                 "merged_prs": summary["merged_prs"],
@@ -780,6 +786,7 @@ def model_breakdown(
                 f"{_BILLING_MIN_DATE_SQL} "
                 "AND lower(product) LIKE '%copilot%' "
                 f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+                f"{_EXCLUDE_ORG_APPLIED_AICREDITS_SQL} "
                 f"{dedup} "
                 "GROUP BY sku, model",
                 (start_iso, end_iso),
@@ -1634,9 +1641,9 @@ def quality_summary(
 
 
 TOKENS_NOTE = (
-    "GitHub does not expose per-user or per-org token counts for Copilot. "
-    "Only AI-credit counts (and other billed SKUs) are available via "
-    "the enhanced billing API."
+    "Per-user AI credit attribution requires importing a billing CSV "
+    "(Settings → Billing → Usage report). The live API provides only "
+    "org-level totals for the current month without per-user breakdown."
 )
 
 
@@ -1651,10 +1658,54 @@ def _is_legacy_premium_request_sku(sku: str | None) -> bool:
 # SQL predicate matching billable Copilot usage SKUs: legacy premium requests
 # plus AI-credit SKUs (e.g. ``copilot_ai_credit``) surfaced by CSV billing
 # reports. Kept in one place so every rollup query stays consistent.
-_COPILOT_BILLABLE_SKU_SQL = (
-    "((lower(sku) LIKE '%premium%' AND lower(sku) LIKE '%request%') "
-    "OR lower(sku) LIKE '%ai_credit%' OR lower(sku) LIKE '%ai credit%')"
-)
+def _copilot_billable_sku_sql(alias: str = "") -> str:
+    """Return SQL predicate matching billable Copilot usage SKUs.
+
+    Args:
+        alias: Optional table alias for qualifying ``sku``.
+    """
+    prefix = f"{alias}." if alias else ""
+    return (
+        f"((lower({prefix}sku) LIKE '%premium%' AND lower({prefix}sku) LIKE '%request%') "
+        f"OR lower({prefix}sku) LIKE '%ai_credit%' OR lower({prefix}sku) LIKE '%ai credit%')"
+    )
+
+
+_COPILOT_BILLABLE_SKU_SQL = _copilot_billable_sku_sql()
+
+
+def _exclude_org_applied_aicredits_sql(alias: str = "") -> str:
+    """Return SQL predicate that excludes org-level applied-credit rows.
+
+    GitHub emits ``unit_type = AICredits`` org-level rows (``login == ''``)
+    that represent the daily credit allowance applied against the org. When
+    per-user attributed rows also exist for the same date (from CSV import),
+    the org-level row is a redundant aggregate and must be excluded.
+
+    However, when no per-user rows exist for a date (e.g. current month with
+    only API-sourced data), the org-level row IS the best available daily
+    consumption signal and should be kept.
+    """
+    prefix = f"{alias}." if alias else ""
+    tbl = f"{alias}" if alias else "billing_usage"
+    billable = _copilot_billable_sku_sql("bu_usr")
+    return (
+        f"AND NOT ("
+        f"lower({prefix}unit_type) = 'aicredits' "
+        f"AND {prefix}login = '' "
+        f"AND EXISTS ("
+        f"SELECT 1 FROM billing_usage bu_usr "
+        f"WHERE bu_usr.date = {tbl}.date "
+        f"AND bu_usr.date >= '{BILLING_MIN_DATE}' "
+        f"AND lower(bu_usr.product) LIKE '%copilot%' "
+        f"AND {billable} "
+        f"AND bu_usr.login != ''"
+        f")"
+        f")"
+    )
+
+
+_EXCLUDE_ORG_APPLIED_AICREDITS_SQL = _exclude_org_applied_aicredits_sql()
 
 # Query-time guard so rows imported before billing launch never leak into
 # rollups, even if legacy data still exists in the DB.
@@ -1664,32 +1715,84 @@ _BILLING_MIN_DATE_SQL = f"AND date >= '{BILLING_MIN_DATE}'"
 def _billing_dedup_sql(
     conn: Any, start_iso: str, end_iso: str,
 ) -> str:
-    """Return a SQL fragment that prevents double-counting billing rows.
+    """Return SQL fragment to deduplicate overlapping billing rows.
 
-    When both the AI-usage CSV (per-user/per-model detail) and the general
-    usage CSV (monthly aggregates) have been imported, their rows overlap.
-    This helper returns a conditional filter:
+    Rule for billable Copilot SKUs:
+    keep model-attributed rows; keep non-model rows only when no matching
+    model-attributed row exists for the same ``(date, login, sku)``.
 
-    * **AI-credit SKUs** — keep only model-attributed rows (``model != ''``).
-    * **Non-AI-credit SKUs** (licenses) — keep only login-attributed rows
-      (``login != ''``), excluding the general-CSV monthly aggregate.
-
-    Returns ``""`` when only non-detailed data exists (general CSV only).
+    This avoids a window-level mode switch where one model row in range could
+    zero out valid non-model usage for other users/teams.
     """
-    has = conn.execute(
-        "SELECT 1 FROM billing_usage WHERE date BETWEEN ? AND ? "
-        f"{_BILLING_MIN_DATE_SQL} "
-        "AND lower(product) LIKE '%copilot%' "
-        f"AND {_COPILOT_BILLABLE_SKU_SQL} "
-        "AND model != '' LIMIT 1",
-        (start_iso, end_iso),
-    ).fetchone()
-    if has:
-        return (
-            f"AND (({_COPILOT_BILLABLE_SKU_SQL} AND model != '') "
-            f"OR (NOT ({_COPILOT_BILLABLE_SKU_SQL}) AND login != ''))"
-        )
-    return ""
+    _ = conn, start_iso, end_iso
+    model_billable_predicate = _copilot_billable_sku_sql("bu_model")
+    return (
+        "AND ("
+        f"NOT ({_COPILOT_BILLABLE_SKU_SQL}) "
+        "OR model != '' "
+        "OR NOT EXISTS ("
+        "SELECT 1 FROM billing_usage bu_model "
+        "WHERE bu_model.date = billing_usage.date "
+        f"AND bu_model.date >= '{BILLING_MIN_DATE}' "
+        "AND lower(bu_model.product) LIKE '%copilot%' "
+        f"AND {model_billable_predicate} "
+        "AND lower(bu_model.sku) = lower(billing_usage.sku) "
+        "AND ((billing_usage.login != '' AND lower(bu_model.login) = lower(billing_usage.login)) "
+        "OR billing_usage.login = '') "
+        "AND bu_model.model != ''"
+        ")"
+        ")"
+    )
+
+
+def _credit_window_with_login_fallback(
+    start_iso: str,
+    end_iso: str,
+) -> tuple[str, str]:
+    """Return credit window shifted to latest login-attributed data when needed.
+
+    Users/Teams views require per-login attribution. If a requested window has
+    only org-level aggregate rows (``login == ''``), shift the credit window to
+    the most recent same-length window ending at the latest date with
+    login-attributed billable Copilot usage at or before ``end_iso``.
+    """
+    start_d = _parse_date(start_iso)
+    end_d = _parse_date(end_iso)
+    if start_d is None or end_d is None:
+        return start_iso, end_iso
+    if start_d > end_d:
+        start_d, end_d = end_d, start_d
+    window_days = (end_d - start_d).days + 1
+
+    with db.connect() as conn:
+        has_login_rows = conn.execute(
+            "SELECT 1 FROM billing_usage WHERE date BETWEEN ? AND ? "
+            f"{_BILLING_MIN_DATE_SQL} "
+            "AND lower(product) LIKE '%copilot%' "
+            f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            "AND login != '' LIMIT 1",
+            (start_d.isoformat(), end_d.isoformat()),
+        ).fetchone()
+        if has_login_rows:
+            return start_d.isoformat(), end_d.isoformat()
+
+        latest = conn.execute(
+            "SELECT MAX(date) AS latest_date FROM billing_usage WHERE date <= ? "
+            f"{_BILLING_MIN_DATE_SQL} "
+            "AND lower(product) LIKE '%copilot%' "
+            f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            "AND login != ''",
+            (end_d.isoformat(),),
+        ).fetchone()
+
+    latest_iso = (latest["latest_date"] if latest else None) or ""
+    latest_d = _parse_date(latest_iso)
+    if latest_d is None:
+        return start_d.isoformat(), end_d.isoformat()
+
+    shifted_end = latest_d
+    shifted_start = shifted_end - timedelta(days=window_days - 1)
+    return shifted_start.isoformat(), shifted_end.isoformat()
 
 
 def _is_copilot_billable_sku(sku: str | None) -> bool:
@@ -1831,6 +1934,16 @@ def ai_credits_summary(
     Surfaces the token-availability note alongside the data.
     """
     start_iso, end_iso, _ = _window(days=days, start=start, end=end, default_days=30)
+    end_d = _parse_date(end_iso) or _today()
+    month_start = date_cls(end_d.year, end_d.month, 1)
+    if end_d.month == 12:
+        next_month_start = date_cls(end_d.year + 1, 1, 1)
+    else:
+        next_month_start = date_cls(end_d.year, end_d.month + 1, 1)
+    month_end = next_month_start - timedelta(days=1)
+    month_start_iso = month_start.isoformat()
+    month_end_iso = month_end.isoformat()
+
     with db.connect() as conn:
         dedup = _billing_dedup_sql(conn, start_iso, end_iso)
         sku_rows = conn.execute(
@@ -1840,6 +1953,7 @@ def ai_credits_summary(
             f"{_BILLING_MIN_DATE_SQL} "
             "AND lower(product) LIKE '%copilot%' "
             f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            f"{_EXCLUDE_ORG_APPLIED_AICREDITS_SQL} "
             f"{dedup} "
             "GROUP BY sku, product",
             (start_iso, end_iso),
@@ -1851,6 +1965,7 @@ def ai_credits_summary(
             f"{_BILLING_MIN_DATE_SQL} "
             "AND lower(product) LIKE '%copilot%' "
             f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            f"{_EXCLUDE_ORG_APPLIED_AICREDITS_SQL} "
             f"{dedup} "
             "AND login != '' "
             "GROUP BY login ORDER BY qty DESC LIMIT 25",
@@ -1862,6 +1977,7 @@ def ai_credits_summary(
             f"{_BILLING_MIN_DATE_SQL} "
             "AND lower(product) LIKE '%copilot%' "
             f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            f"{_EXCLUDE_ORG_APPLIED_AICREDITS_SQL} "
             f"{dedup} "
             "AND login != '' "
             "GROUP BY model, sku, login",
@@ -1873,13 +1989,27 @@ def ai_credits_summary(
             f"{_BILLING_MIN_DATE_SQL} "
             "AND lower(product) LIKE '%copilot%' "
             f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            f"{_EXCLUDE_ORG_APPLIED_AICREDITS_SQL} "
             f"{dedup}",
             (start_iso, end_iso),
         ).fetchone()
         has_any_row = conn.execute(
             "SELECT COUNT(*) AS n FROM billing_usage "
-            "WHERE date >= ? AND lower(product) LIKE '%copilot%'",
+            "WHERE date >= ? AND lower(product) LIKE '%copilot%' "
+            f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            f"{_EXCLUDE_ORG_APPLIED_AICREDITS_SQL}",
             (BILLING_MIN_DATE,)
+        ).fetchone()
+        applied_row = conn.execute(
+            "SELECT SUM(quantity) AS credits, "
+            "SUM(gross_amount_usd) AS gross, "
+            "SUM(net_amount_usd) AS net "
+            "FROM billing_usage WHERE date BETWEEN ? AND ? "
+            f"{_BILLING_MIN_DATE_SQL} "
+            "AND lower(product) LIKE '%copilot%' "
+            "AND lower(unit_type) = 'aicredits' "
+            "AND login = ''",
+            (month_start_iso, month_end_iso),
         ).fetchone()
 
     sku_totals: dict[tuple[str, str], dict[str, float]] = {}
@@ -2019,13 +2149,21 @@ def ai_credits_summary(
     headline_qty: float | None = None
     headline_net: float | None = None
     headline_gross: float | None = None
+    headline_period = db.get_meta("ai_credit_headline_period") or ""
+    window_period = f"{end_d.year}-{end_d.month:02d}"
     raw_qty = db.get_meta("ai_credit_headline_qty")
-    if raw_qty is not None:
+    if raw_qty is not None and headline_period == window_period:
         headline_qty = float(raw_qty)
         raw_net = db.get_meta("ai_credit_headline_net_usd")
         headline_net = float(raw_net) if raw_net else None
         raw_gross = db.get_meta("ai_credit_headline_gross_usd")
         headline_gross = float(raw_gross) if raw_gross else None
+
+    applied_credits_month = float(applied_row["credits"] or 0) if applied_row else 0.0
+    applied_gross_month = float(applied_row["gross"] or 0) if applied_row else 0.0
+    applied_net_month = float(applied_row["net"] or 0) if applied_row else 0.0
+    # Included-usage value for these org-level AICredits rows.
+    applied_discount_usd_month = max(0.0, applied_gross_month - applied_net_month)
 
     return {
         "window_start": start_iso,
@@ -2039,6 +2177,9 @@ def ai_credits_summary(
         "headline_ai_credit_cost_usd": round(headline_net, 2) if headline_net is not None else None,
         "headline_ai_credit_gross_usd": round(headline_gross, 2) if headline_gross is not None else None,
         "headline_fetched_at": db.get_meta("ai_credit_headline_at"),
+        "credits_applied_month_label": month_start.strftime("%b %Y"),
+        "credits_applied_month": round(applied_credits_month, 2),
+        "credits_applied_discount_usd_month": round(applied_discount_usd_month, 2),
         "skus": skus,
         "top_users": top_users,
         "top_users_per_model": top_users_per_model,
@@ -2068,6 +2209,7 @@ def ai_credits_for_user(
                 f"{_BILLING_MIN_DATE_SQL} "
                 "AND lower(login) = lower(?) "
                 "AND lower(product) LIKE '%copilot%' "
+                f"AND {_COPILOT_BILLABLE_SKU_SQL} "
                 f"{dedup} "
                 "GROUP BY date, sku, model ORDER BY date ASC, sku ASC",
                 (start_iso, end_iso, login),
@@ -2104,6 +2246,7 @@ def ai_credits_for_user(
         "window_end": end_iso,
         "ai_credits": round(total_qty, 2),
         "ai_credit_cost_usd": round(total_net, 2),
+        "credit_data_available": total_qty > 0,
         "by_sku": [
             {"sku": s, "quantity": round(v["quantity"], 2), "net_amount_usd": round(v["net_amount_usd"], 2)}
             for s, v in sorted(by_sku.items(), key=lambda kv: -kv[1]["quantity"])
@@ -2148,6 +2291,7 @@ def ai_credits_for_team(
                 "ai_credit_cost_usd": 0.0,
                 "top_users": [],
                 "members": 0,
+                "credit_data_available": False,
                 "tokens_available": False,
                 "tokens_note": TOKENS_NOTE,
             }
@@ -2181,6 +2325,113 @@ def ai_credits_for_team(
         "ai_credits": round(total_qty, 2),
         "ai_credit_cost_usd": round(total_net, 2),
         "top_users": top_users,
+        "credit_data_available": len(top_users) > 0,
         "tokens_available": False,
         "tokens_note": TOKENS_NOTE,
+    }
+
+
+def daily_org_ai_credits() -> dict[str, Any]:
+    """Return daily cumulative AI-credit consumption for the current and previous calendar months.
+
+    Used by the projection chart on the Summary page to visualise whether
+    consumption is trending above or below the previous month's baseline.
+
+    Returns a dict with:
+        current_month      – list of {day, cumulative} for the current calendar month
+        previous_month     – list of {day, cumulative} for the previous calendar month
+        current_month_label  – human-readable label, e.g. "Jul 2026"
+        previous_month_label – human-readable label, e.g. "Jun 2026"
+    """
+    today = _today()
+    # Current calendar month: 1st → today
+    cur_start = date_cls(today.year, today.month, 1)
+    cur_end = today
+
+    # Previous calendar month: 1st → last day of that month
+    first_of_cur = cur_start
+    prev_end = first_of_cur - timedelta(days=1)
+    prev_start = date_cls(prev_end.year, prev_end.month, 1)
+
+    cur_start_iso = cur_start.isoformat()
+    cur_end_iso = cur_end.isoformat()
+    prev_start_iso = prev_start.isoformat()
+    prev_end_iso = prev_end.isoformat()
+
+    def _fetch_daily(start_iso: str, end_iso: str) -> list[tuple[str, float]]:
+        with db.connect() as conn:
+            dedup = _billing_dedup_sql(conn, start_iso, end_iso)
+            rows = conn.execute(
+                "SELECT date, SUM(quantity) AS qty "
+                "FROM billing_usage WHERE date BETWEEN ? AND ? "
+                f"{_BILLING_MIN_DATE_SQL} "
+                "AND lower(product) LIKE '%copilot%' "
+                f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+                f"{_EXCLUDE_ORG_APPLIED_AICREDITS_SQL} "
+                f"{dedup} "
+                "GROUP BY date ORDER BY date",
+                (start_iso, end_iso),
+            ).fetchall()
+        return [(r["date"], float(r["qty"] or 0)) for r in rows]
+
+    def _to_cumulative(rows: list[tuple[str, float]], month_start: date_cls) -> list[dict[str, Any]]:
+        """Convert raw daily rows to cumulative day-of-month series."""
+        daily: dict[int, float] = {}
+        for date_str, qty in rows:
+            d = _parse_date(date_str)
+            if d is None:
+                continue
+            day_num = d.day
+            daily[day_num] = daily.get(day_num, 0.0) + qty
+        result = []
+        running = 0.0
+        # Iterate over every day from 1 to the last day present (or today's day for current)
+        max_day = max(daily.keys()) if daily else 0
+        for day_num in range(1, max_day + 1):
+            running += daily.get(day_num, 0.0)
+            result.append({"day": day_num, "cumulative": round(running, 2)})
+        return result
+
+    cur_rows = _fetch_daily(cur_start_iso, cur_end_iso)
+    prev_rows = _fetch_daily(prev_start_iso, prev_end_iso)
+
+    cur_label = cur_start.strftime("%b %Y")
+    prev_label = prev_start.strftime("%b %Y")
+
+    # --- Budget / quota data ---
+    # Included credits: org-level AICredits rows (login='') for current month.
+    with db.connect() as conn:
+        applied_row = conn.execute(
+            "SELECT SUM(quantity) AS credits "
+            "FROM billing_usage WHERE date BETWEEN ? AND ? "
+            f"{_BILLING_MIN_DATE_SQL} "
+            "AND lower(product) LIKE '%copilot%' "
+            "AND lower(unit_type) = 'aicredits' "
+            "AND login = ''",
+            (cur_start_iso, cur_end_iso),
+        ).fetchone()
+
+    included_credits = float(applied_row["credits"] or 0) if applied_row else 0.0
+
+    budget_usd = settings.monthly_ai_budget_usd  # env fallback (0 = not set)
+    budget_credits = budget_usd / 0.01 if budget_usd > 0 else 0.0
+
+    # Total quota: budget_credits (from env or Budgets API at endpoint layer)
+    # + included_credits from billing data org-level rows.
+    if budget_credits > 0:
+        total_quota_credits: float | None = budget_credits + included_credits
+    else:
+        total_quota_credits = None  # unknown — resolved at endpoint via Budgets API
+
+    current_cumulative = _to_cumulative(cur_rows, cur_start)
+
+    return {
+        "current_month": current_cumulative,
+        "previous_month": _to_cumulative(prev_rows, prev_start),
+        "current_month_label": cur_label,
+        "previous_month_label": prev_label,
+        # Budget / quota fields
+        "budget_usd": budget_usd if budget_usd > 0 else None,
+        "included_credits": round(included_credits, 2) if included_credits else None,
+        "monthly_quota_credits": round(total_quota_credits, 2) if total_quota_credits else None,
     }

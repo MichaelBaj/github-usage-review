@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type CodeEditorRow, type ModelBreakdown, type TeamDetail, type TeamRow } from "../api";
-import { defaultWindow, DateRangeSelector, toWindowParams, type WindowState } from "./DateRangeSelector";
+import { DateRangeSelector, toWindowParams, type WindowState } from "./DateRangeSelector";
 import {
   BarChart,
   Bar,
@@ -15,8 +15,7 @@ type TeamSortCol = "team" | "members_total" | "active_members" | "ai_credits";
 type SortDir = "asc" | "desc";
 
 /** Renders the per-team tab: team list on the left, detail on the right. */
-export function TeamsTab(): JSX.Element {
-  const [win, setWin] = useState<WindowState>(defaultWindow(30));
+export function TeamsTab({ win, onWinChange }: { win: WindowState; onWinChange: (w: WindowState) => void }): JSX.Element {
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<TeamDetail | null>(null);
@@ -71,7 +70,7 @@ export function TeamsTab(): JSX.Element {
 
   return (
     <div>
-      <DateRangeSelector value={win} onChange={setWin} />
+      <DateRangeSelector value={win} onChange={onWinChange} />
       {error ? <div className="error">{error}</div> : null}
       <div className="split">
         <div style={{ minWidth: 320, display: "flex", flexDirection: "column", gap: 16 }}>
@@ -79,6 +78,7 @@ export function TeamsTab(): JSX.Element {
           <h2>Teams</h2>
           <div className="muted" style={{ marginBottom: 8 }}>
             Derived from per-user data (seat activity + billing) rolled up by team membership.
+            Import a billing CSV covering this period to see AI credit attribution.
           </div>
           <table>
             <thead>
@@ -86,7 +86,7 @@ export function TeamsTab(): JSX.Element {
                 <th className="sortable-th" onClick={() => toggleSort("team")}>Team{sortIndicator("team")}</th>
                 <th className="sortable-th" onClick={() => toggleSort("members_total")}>Members{sortIndicator("members_total")}</th>
                 <th className="sortable-th" onClick={() => toggleSort("active_members")}>Active{sortIndicator("active_members")}</th>
-                <th className="sortable-th" onClick={() => toggleSort("ai_credits")}>Premium Reqs{sortIndicator("ai_credits")}</th>
+                <th className="sortable-th" onClick={() => toggleSort("ai_credits")}>AI Credits{sortIndicator("ai_credits")}</th>
               </tr>
             </thead>
             <tbody>
@@ -103,7 +103,7 @@ export function TeamsTab(): JSX.Element {
                     {t.active_members}
                     {t.members_with_seats ? ` (${(t.adoption_rate * 100).toFixed(0)}%)` : ""}
                   </td>
-                  <td>{fmtNum(t.ai_credits)}</td>
+                  <td>{t.credit_data_available ? fmtNum(t.ai_credits) : <span className="muted">—</span>}</td>
                 </tr>
               ))}
               {sorted.length === 0 ? (
@@ -120,6 +120,12 @@ export function TeamsTab(): JSX.Element {
             <div className="panel">
               <h2>PR Activity — {detail.team}</h2>
               <PrCorrelationTable c={detail.pr_correlation} />
+            </div>
+          ) : null}
+          {detail ? (
+            <div className="panel">
+              <h2>AI Credit Usage (Billing-Derived)</h2>
+              <AiCreditsTeamBlock data={detail.ai_credits} />
             </div>
           ) : null}
         </div>
@@ -180,11 +186,12 @@ function TeamDetailView({ detail }: { detail: TeamDetail }): JSX.Element {
           />
           <Kpi
             label="AI credits"
-            value={fmtNum(detail.ai_credits.ai_credits)}
-            sub={`${fmtMoney(detail.ai_credits.ai_credit_cost_usd)} billed`}
+            value={detail.ai_credits.credit_data_available ? fmtNum(detail.ai_credits.ai_credits) : "—"}
+            sub={detail.ai_credits.credit_data_available ? `${fmtMoney(detail.ai_credits.ai_credit_cost_usd)} billed` : "No billing data for this window"}
             tooltip={
               "Sum of AI-credit quantity across this team's members in the window " +
-              "(enhanced-billing API, joined on team_members.login)."
+              "(enhanced-billing API, joined on team_members.login). " +
+              "Users in multiple teams are counted in each team separately."
             }
           />
           <Kpi
@@ -244,11 +251,6 @@ function TeamDetailView({ detail }: { detail: TeamDetail }): JSX.Element {
             ) : null}
           </tbody>
         </table>
-      </div>
-
-      <div className="panel">
-        <h2>AI Credit Usage (Billing-Derived)</h2>
-        <AiCreditsTeamBlock data={detail.ai_credits} />
       </div>
     </>
   );
@@ -497,7 +499,7 @@ export function Kpi({
 }: {
   label: string;
   value: string;
-  sub?: string;
+  sub?: React.ReactNode;
   tooltip?: string;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -581,6 +583,12 @@ export function AiCreditsTeamBlock({
 }): JSX.Element {
   return (
     <>
+      {!data.credit_data_available ? (
+        <div className="muted" style={{ marginBottom: 8, padding: "8px 12px", background: "var(--bg-secondary)", borderRadius: 6 }}>
+          No per-user billing data available for this window ({data.window_start} → {data.window_end}).
+          Import a billing CSV covering this period to see AI credit attribution.
+        </div>
+      ) : null}
       <div className="muted" style={{ marginBottom: 8 }}>
         <strong>Tokens:</strong> {data.tokens_note}
       </div>

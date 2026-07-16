@@ -10,7 +10,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Calendar-date versioning (YYYY-MM-DD.build)
-VERSION = "2026-06-26.3"
+VERSION = "2026-07-09.1"
 # Billing data before this date is rejected during import.
 BILLING_MIN_DATE = "2026-06-01"
 
@@ -93,6 +93,16 @@ class Settings(BaseSettings):
     import_max_upload_mb: int = Field(
         default=25,
         description="Maximum local JSON/JSONL/NDJSON import upload size in MiB.",
+    )
+
+    # --- Budget / quota ---
+    monthly_ai_budget_usd: float = Field(
+        default=0.0,
+        description=(
+            "Monthly AI-credit budget in USD. Used as a fallback when the "
+            "GitHub Budgets API is inaccessible (403/404). Set to 0 to rely "
+            "solely on the API. Example: 6000.0 for a $6,000/month cap."
+        ),
     )
 
 

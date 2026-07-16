@@ -97,7 +97,7 @@ def test_ai_credits_summary_aggregates_org_total(billing_db: None) -> None:
     assert out["total_ai_credits"] == pytest.approx(25.0)  # 12 + 5 + 8
     assert out["total_ai_credit_cost_usd"] == pytest.approx(1.00)
     assert out["tokens_available"] is False
-    assert "token" in out["tokens_note"].lower()
+    assert "billing csv" in out["tokens_note"].lower()
 
 
 def test_ai_credits_summary_lists_top_users(billing_db: None) -> None:
@@ -157,6 +157,90 @@ def test_ai_credits_summary_sku_table_uses_billable_rows_and_normalizes_labels()
     assert row["sku"] == "copilot_ai_credit"
     assert row["product"] == "copilot"
     assert row["quantity"] == pytest.approx(150.0)
+
+
+def test_ai_credits_summary_reports_monthly_applied_credits_and_discount() -> None:
+    """Monthly org-level AICredits map to credits-applied + included-discount fields."""
+    # Arrange
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-07-01",
+                "login": "",
+                "product": "Copilot",
+                "sku": "Copilot AI Credits",
+                "unit_type": "AICredits",
+                "quantity": 1000,
+                "gross_amount_usd": 10.0,
+                "net_amount_usd": 1.5,
+            },
+            {
+                "date": "2026-07-02",
+                "login": "",
+                "product": "Copilot",
+                "sku": "Copilot AI Credits",
+                "unit_type": "AICredits",
+                "quantity": 500,
+                "gross_amount_usd": 5.0,
+                "net_amount_usd": 0.0,
+            },
+            {
+                "date": "2026-06-30",
+                "login": "",
+                "product": "Copilot",
+                "sku": "Copilot AI Credits",
+                "unit_type": "AICredits",
+                "quantity": 999,
+                "gross_amount_usd": 9.99,
+                "net_amount_usd": 0.0,
+            },
+        ]
+    )
+
+    # Act
+    out = analytics.ai_credits_summary(start="2026-07-01", end="2026-07-07")
+
+    # Assert
+    assert out["credits_applied_month_label"] == "Jul 2026"
+    assert out["credits_applied_month"] == pytest.approx(1500.0)
+    assert out["credits_applied_discount_usd_month"] == pytest.approx(13.5)
+
+
+def test_ai_credits_summary_excludes_org_level_applied_aicredits_from_consumed_totals() -> None:
+    """Org-level unit_type=AICredits rows are allowance/discount, not consumed credits."""
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-07-01",
+                "login": "",
+                "product": "Copilot",
+                "sku": "Copilot AI Credits",
+                "unit_type": "AICredits",
+                "quantity": 1000,
+                "gross_amount_usd": 10.0,
+                "net_amount_usd": 2.0,
+            },
+            {
+                "date": "2026-07-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 120,
+                "gross_amount_usd": 1.2,
+                "net_amount_usd": 1.2,
+                "model": "Claude Sonnet 4.6",
+            },
+        ]
+    )
+
+    out = analytics.ai_credits_summary(start="2026-07-01", end="2026-07-01")
+
+    assert out["total_ai_credits"] == pytest.approx(120.0)
+    assert out["top_users"][0]["login"] == "alice"
+    assert out["credits_applied_month"] == pytest.approx(1000.0)
+    assert out["credits_applied_discount_usd_month"] == pytest.approx(8.0)
 
 
 def test_ai_credits_for_user_filters_by_login(billing_db: None) -> None:
@@ -450,6 +534,76 @@ def test_ai_credits_summary_deduplicates_overlapping_sources() -> None:
     assert out["top_users"][0]["ai_credits"] == pytest.approx(100.0)
 
 
+def test_ai_credits_for_user_keeps_non_model_rows_without_same_user_model_match() -> None:
+    """User credits should not drop when another user has model-attributed rows."""
+    # Arrange
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-06-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 7,
+                "net_amount_usd": 0.28,
+                "model": "",
+            },
+            {
+                "date": "2026-06-01",
+                "login": "bob",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 11,
+                "net_amount_usd": 0.44,
+                "model": "GPT-5.4",
+            },
+        ]
+    )
+
+    # Act
+    out = analytics.ai_credits_for_user("alice", start="2026-06-01", end="2026-06-01")
+
+    # Assert
+    assert out["ai_credits"] == pytest.approx(7.0)
+
+
+def test_ai_credits_for_team_keeps_non_model_rows_without_member_model_match() -> None:
+    """Team credits should include member rows even if model rows exist for other users."""
+    # Arrange
+    db.init_db()
+    db.replace_team_members("alpha", ["alice"])
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-06-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 9,
+                "net_amount_usd": 0.36,
+                "model": "",
+            },
+            {
+                "date": "2026-06-01",
+                "login": "bob",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 14,
+                "net_amount_usd": 0.56,
+                "model": "Claude Opus 4.6",
+            },
+        ]
+    )
+
+    # Act
+    out = analytics.ai_credits_for_team("alpha", start="2026-06-01", end="2026-06-01")
+
+    # Assert
+    assert out["ai_credits"] == pytest.approx(9.0)
+    assert out["members"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Headline AI-credit aggregate (ai_credit/usage endpoint)
 # ---------------------------------------------------------------------------
@@ -527,3 +681,222 @@ async def test_ingest_ai_credit_headline_stores_meta() -> None:
     assert float(db.get_meta("ai_credit_headline_net_usd")) == pytest.approx(1234.98)
     assert db.get_meta("ai_credit_headline_period") == "2026-06"
     assert db.get_meta("ai_credit_headline_at") is not None
+
+
+# ---------------------------------------------------------------------------
+# daily_org_ai_credits — projection chart data
+# ---------------------------------------------------------------------------
+
+def _seed_two_months(cur_date: str, prev_date: str) -> None:
+    """Seed billing_usage with one row per day for two calendar months."""
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": cur_date,
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 10,
+                "net_amount_usd": 0.40,
+                "model": "claude-sonnet",
+            },
+            {
+                "date": prev_date,
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 7,
+                "net_amount_usd": 0.28,
+                "model": "claude-sonnet",
+            },
+        ]
+    )
+
+
+def test_daily_org_ai_credits_returns_correct_month_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Month labels match the calendar months relative to the mocked today."""
+    from datetime import date as date_cls
+    monkeypatch.setattr(analytics, "_today", lambda: date_cls(2026, 7, 7))
+    _seed_two_months("2026-07-03", "2026-06-15")
+
+    out = analytics.daily_org_ai_credits()
+
+    assert out["current_month_label"] == "Jul 2026"
+    assert out["previous_month_label"] == "Jun 2026"
+
+
+def test_daily_org_ai_credits_cumulative_running_total(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cumulative series increases monotonically and matches raw daily totals."""
+    from datetime import date as date_cls
+    monkeypatch.setattr(analytics, "_today", lambda: date_cls(2026, 7, 7))
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-07-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 5,
+                "net_amount_usd": 0.20,
+                "model": "claude-sonnet",
+            },
+            {
+                "date": "2026-07-03",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 10,
+                "net_amount_usd": 0.40,
+                "model": "claude-sonnet",
+            },
+        ]
+    )
+
+    out = analytics.daily_org_ai_credits()
+    cur = out["current_month"]
+
+    # Must have entries up to day 3 (the last day with data)
+    assert len(cur) == 3
+    assert cur[0] == {"day": 1, "cumulative": pytest.approx(5.0)}
+    assert cur[1] == {"day": 2, "cumulative": pytest.approx(5.0)}   # no data → unchanged
+    assert cur[2] == {"day": 3, "cumulative": pytest.approx(15.0)}
+
+    # Each step must be non-decreasing
+    for i in range(1, len(cur)):
+        assert cur[i]["cumulative"] >= cur[i - 1]["cumulative"]
+
+
+def test_daily_org_ai_credits_empty_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no billing data both series are empty; labels are still set."""
+    from datetime import date as date_cls
+    monkeypatch.setattr(analytics, "_today", lambda: date_cls(2026, 7, 7))
+    db.init_db()
+
+    out = analytics.daily_org_ai_credits()
+
+    assert out["current_month"] == []
+    assert out["previous_month"] == []
+    assert out["current_month_label"] == "Jul 2026"
+    assert out["previous_month_label"] == "Jun 2026"
+
+
+def test_daily_org_ai_credits_excludes_non_billable_skus(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-billable SKUs (e.g. enterprise seats) are excluded from credit totals."""
+    from datetime import date as date_cls
+    monkeypatch.setattr(analytics, "_today", lambda: date_cls(2026, 7, 7))
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-07-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 20,
+                "net_amount_usd": 0.80,
+                "model": "claude-sonnet",
+            },
+            {
+                "date": "2026-07-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_enterprise",       # non-billable seat SKU
+                "quantity": 900,
+                "net_amount_usd": 9.00,
+                "model": "",
+            },
+        ]
+    )
+
+    out = analytics.daily_org_ai_credits()
+
+    assert len(out["current_month"]) == 1
+    assert out["current_month"][0]["cumulative"] == pytest.approx(20.0)
+
+
+def test_daily_org_ai_credits_excludes_org_level_applied_aicredits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Projection excludes org-level AICredits when per-user rows exist for same date."""
+    from datetime import date as date_cls
+
+    monkeypatch.setattr(analytics, "_today", lambda: date_cls(2026, 7, 7))
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-07-01",
+                "login": "",
+                "product": "Copilot",
+                "sku": "Copilot AI Credits",
+                "unit_type": "AICredits",
+                "quantity": 1000,
+                "gross_amount_usd": 10.0,
+                "net_amount_usd": 0.0,
+            },
+            {
+                "date": "2026-07-01",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 12,
+                "net_amount_usd": 0.48,
+                "model": "claude-sonnet",
+            },
+            {
+                "date": "2026-07-02",
+                "login": "alice",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 8,
+                "net_amount_usd": 0.32,
+                "model": "claude-sonnet",
+            },
+        ]
+    )
+
+    out = analytics.daily_org_ai_credits()
+    cur = out["current_month"]
+
+    # Jul 1: org-level excluded because per-user row exists; Jul 2: user row kept
+    assert cur[0] == {"day": 1, "cumulative": pytest.approx(12.0)}
+    assert cur[1] == {"day": 2, "cumulative": pytest.approx(20.0)}
+
+
+def test_daily_org_ai_credits_keeps_org_aicredits_when_no_per_user_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Projection keeps org-level AICredits rows when no per-user data exists for that date."""
+    from datetime import date as date_cls
+
+    monkeypatch.setattr(analytics, "_today", lambda: date_cls(2026, 7, 7))
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            {
+                "date": "2026-07-01",
+                "login": "",
+                "product": "Copilot",
+                "sku": "Copilot AI Credits",
+                "unit_type": "AICredits",
+                "quantity": 500,
+                "gross_amount_usd": 5.0,
+                "net_amount_usd": 0.0,
+            },
+            {
+                "date": "2026-07-02",
+                "login": "",
+                "product": "Copilot",
+                "sku": "Copilot AI Credits",
+                "unit_type": "AICredits",
+                "quantity": 300,
+                "gross_amount_usd": 3.0,
+                "net_amount_usd": 0.0,
+            },
+        ]
+    )
+
+    out = analytics.daily_org_ai_credits()
+    cur = out["current_month"]
+
+    # No per-user rows → org-level AICredits kept as best available signal
+    assert cur[0] == {"day": 1, "cumulative": pytest.approx(500.0)}
+    assert cur[1] == {"day": 2, "cumulative": pytest.approx(800.0)}

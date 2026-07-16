@@ -3,6 +3,7 @@ import {
   api,
   type AiCreditBalancedUser,
   type AiCreditTopUsersPerModel,
+  type AiCreditsProjection,
   type Breakdowns,
   type CostWindow,
   type FeatureBreakdown,
@@ -17,7 +18,6 @@ import { TeamLeaderboard } from "./TeamLeaderboard";
 import { StaleSeats } from "./StaleSeats";
 import { BreakdownCharts } from "./BreakdownCharts";
 import {
-  defaultWindow,
   DateRangeSelector,
   toWindowParams,
   type WindowState,
@@ -35,6 +35,7 @@ interface State {
   cost: CostWindow | null;
   premium: AiCreditsSummary | null;
   modelCreditsTotal: number | null;
+  creditProjection: AiCreditsProjection | null;
 }
 
 const initial: State = {
@@ -48,6 +49,7 @@ const initial: State = {
   cost: null,
   premium: null,
   modelCreditsTotal: null,
+  creditProjection: null,
 };
 
 function modelCreditsGrandTotal(data: ModelBreakdown): number {
@@ -154,15 +156,14 @@ function BalancedUsersTable({ users }: { users: AiCreditBalancedUser[] }): JSX.E
   );
 }
 
-export function SummaryTab(): JSX.Element {
-  const [win, setWin] = useState<WindowState>(defaultWindow(30));
+export function SummaryTab({ win, onWinChange }: { win: WindowState; onWinChange: (w: WindowState) => void }): JSX.Element {
   const [state, setState] = useState<State>(initial);
 
   async function load(): Promise<void> {
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
       const params = toWindowParams(win);
-      const [kpis, teams, stale, breakdowns, features, cost, premium, models] = await Promise.all([
+      const [kpis, teams, stale, breakdowns, features, cost, premium, models, creditProjection] = await Promise.all([
         api.kpis(params),
         api.teams(params),
         api.staleSeats(),
@@ -171,6 +172,7 @@ export function SummaryTab(): JSX.Element {
         api.cost(params),
         api.aiCredits(params),
         api.models(params),
+        api.aiCreditsProjection().catch(() => null),
       ]);
       setState({
         loading: false,
@@ -183,6 +185,7 @@ export function SummaryTab(): JSX.Element {
         cost,
         premium,
         modelCreditsTotal: modelCreditsGrandTotal(models),
+        creditProjection,
       });
     } catch (e) {
       setState((s) => ({ ...s, loading: false, error: (e as Error).message }));
@@ -195,7 +198,7 @@ export function SummaryTab(): JSX.Element {
 
   return (
     <div>
-      <DateRangeSelector value={win} onChange={setWin} />
+      <DateRangeSelector value={win} onChange={onWinChange} />
       {state.error ? <div className="error">{state.error}</div> : null}
       {state.loading || !state.kpis ? (
         <div className="loading">Loading summary…</div>
@@ -240,7 +243,7 @@ export function SummaryTab(): JSX.Element {
                   }
                 />
                 <Kpi
-                  label="AI credits"
+                  label="AI credits consumed"
                   value={
                     state.premium?.headline_ai_credits != null
                       ? fmtNum(state.premium.headline_ai_credits)
@@ -261,10 +264,60 @@ export function SummaryTab(): JSX.Element {
                   tooltip={
                     (state.premium?.headline_ai_credits != null
                       ? "Headline total from GitHub ai_credit/usage aggregate endpoint (freshest). "
-                      : "Total from per-day billing rows. ") +
+                      : "Total consumed credits from per-day billing rows. ") +
+                    "Org-level unit_type=AICredits rows (credits applied/discount allowance) are excluded from consumed totals. " +
                     "Sub-value is net cost (USD) for billable Copilot SKUs."
                   }
                 />
+                {state.creditProjection?.monthly_quota_credits != null && (() => {
+                  const quota = state.creditProjection!.monthly_quota_credits!;
+                  const consumed = state.premium?.total_ai_credits ?? 0;
+                  const today = new Date();
+                  const winEnd = new Date(win.end + "T00:00:00");
+                  const isCurrentMonth =
+                    winEnd.getFullYear() === today.getFullYear() &&
+                    winEnd.getMonth() === today.getMonth();
+
+                  if (!isCurrentMonth) {
+                    // Completed month — show actual vs quota, no extrapolation.
+                    const remaining = quota - consumed;
+                    const paceColor = remaining >= 0 ? "var(--color-success, #3fb950)" : "var(--color-danger, #f85149)";
+                    const paceLabel = remaining >= 0 ? "within budget" : "over quota";
+                    return (
+                      <Kpi
+                        label="Month total"
+                        value={`${(consumed / 1000).toFixed(0)}k`}
+                        sub={<span style={{ color: paceColor }}>{paceLabel}</span>}
+                        tooltip={
+                          `Completed month actual: ${fmtNum(consumed)} credits consumed. ` +
+                          `Monthly quota: ${fmtNum(quota)} credits. ` +
+                          `${remaining >= 0 ? `${fmtNum(remaining)} under` : `${fmtNum(Math.abs(remaining))} over`} quota.`
+                        }
+                      />
+                    );
+                  }
+
+                  const dayOfMonth = today.getDate();
+                  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+                  const projectedEom = dayOfMonth > 0 ? Math.round(consumed * (daysInMonth / dayOfMonth)) : 0;
+                  const overUnder = projectedEom - quota;
+                  const pctOver = quota > 0 ? ((overUnder / quota) * 100).toFixed(0) : "0";
+                  const paceLabel = overUnder <= 0
+                    ? "within budget"
+                    : `${pctOver}% over quota`;
+                  const paceColor = overUnder <= 0 ? "var(--color-success, #3fb950)" : "var(--color-danger, #f85149)";
+                  return (
+                    <Kpi
+                      label="Budget pace"
+                      value={`${(projectedEom / 1000).toFixed(0)}k`}
+                      sub={<span style={{ color: paceColor }}>{paceLabel}</span>}
+                      tooltip={
+                        `Projected EOM: ${fmtNum(projectedEom)} credits (linear extrapolation from day ${dayOfMonth}/${daysInMonth}). ` +
+                        `Monthly quota: ${fmtNum(quota)} credits.`
+                      }
+                    />
+                  );
+                })()}
               </div>
 
               {state.premium?.available ? (() => {
@@ -272,6 +325,9 @@ export function SummaryTab(): JSX.Element {
                 const aiNet = state.premium!.total_ai_credit_cost_usd;
                 const included = aiGross - aiNet;
                 const licenses = state.cost!.window_cost_usd - aiNet;
+                const appliedCredits = state.premium!.credits_applied_month ?? 0;
+                const appliedDiscountUsd = state.premium!.credits_applied_discount_usd_month ?? 0;
+                const appliedMonthLabel = state.premium!.credits_applied_month_label || "selected month";
                 return (
                   <div style={{ marginTop: 16 }}>
                     <h3 className="subhead">Cost Breakdown</h3>
@@ -304,6 +360,11 @@ export function SummaryTab(): JSX.Element {
                           <td className="muted">Credits covered by plan allowance</td>
                         </tr>
                         <tr>
+                          <td>Credits applied ({appliedMonthLabel})</td>
+                          <td className="num-col">{fmtNum(appliedCredits)}</td>
+                          <td className="muted">Equivalent to {fmtMoney(appliedDiscountUsd)} included usage discount</td>
+                        </tr>
+                        <tr>
                           <td>AI credits overage (net)</td>
                           <td className="num-col">{fmtMoney(aiNet)}</td>
                           <td className="muted">
@@ -322,6 +383,31 @@ export function SummaryTab(): JSX.Element {
                           <td className="num-col">{fmtMoney(state.cost!.window_cost_usd)}</td>
                           <td className="muted">Licenses + AI overage = GitHub "gross spend"</td>
                         </tr>
+                        {state.creditProjection?.monthly_quota_credits != null && (() => {
+                          const quota = state.creditProjection!.monthly_quota_credits!;
+                          const consumed = state.premium!.total_ai_credits;
+                          const remaining = quota - consumed;
+                          const pctUsed = quota > 0 ? (consumed / quota) * 100 : 0;
+                          const budgetUsd = state.creditProjection!.budget_usd;
+                          const includedCr = state.creditProjection!.included_credits;
+                          const noteParts: string[] = [];
+                          if (budgetUsd) noteParts.push(`$${fmtNum(budgetUsd)} budget`);
+                          if (includedCr) noteParts.push(`${fmtNum(includedCr)} included credits`);
+                          return (
+                            <>
+                              <tr style={{ borderTop: "1px dashed var(--color-border, #444)" }}>
+                                <td>Monthly quota</td>
+                                <td className="num-col">{fmtNum(quota)}</td>
+                                <td className="muted">{noteParts.join(" + ") || "From Budgets API"}</td>
+                              </tr>
+                              <tr style={{ color: remaining >= 0 ? "var(--color-success, #3fb950)" : "var(--color-danger, #f85149)" }}>
+                                <td>Credits remaining</td>
+                                <td className="num-col">{remaining >= 0 ? fmtNum(remaining) : `−${fmtNum(Math.abs(remaining))}`}</td>
+                                <td className="muted">{pctUsed.toFixed(0)}% of quota used</td>
+                              </tr>
+                            </>
+                          );
+                        })()}
                       </tbody>
                     </table>
                   </div>
@@ -332,7 +418,7 @@ export function SummaryTab(): JSX.Element {
 
           <div className="panel">
             <h2>Breakdowns</h2>
-            {state.breakdowns ? <BreakdownCharts data={state.breakdowns} features={state.features} /> : null}
+            {state.breakdowns ? <BreakdownCharts data={state.breakdowns} features={state.features} creditProjection={state.creditProjection} /> : null}
           </div>
 
           <div className="row-grid">

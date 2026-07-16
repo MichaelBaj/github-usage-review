@@ -97,6 +97,12 @@ def import_usage_file(filename: str, content: bytes) -> dict[str, Any]:
     db.set_meta("last_import_at", imported_at)
     db.set_meta("last_data_load_at", imported_at)
     db.set_meta("last_data_load_source", data_load_source)
+    if data_load_source in ("csv_ai_usage_report", "csv_usage_report"):
+        db.set_meta("last_csv_load_at", imported_at)
+        db.set_meta("last_csv_load_source", data_load_source)
+    else:
+        db.set_meta("last_json_load_at", imported_at)
+        db.set_meta("last_json_load_source", data_load_source)
     return summary
 
 
