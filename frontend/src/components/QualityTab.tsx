@@ -253,7 +253,7 @@ export function QualityTab({ win, onWinChange }: { win: WindowState; onWinChange
                 {data.ai_credits.top_users.map((u) => (
                   <tr key={u.login}>
                     <td>{u.login}</td>
-                    <td>{fmtNum(u.ai_credits)}</td>
+                    <td>{fmtNum(u.ai_credits)} ({fmtPct(data.ai_credits.total_ai_credits > 0 ? u.ai_credits / data.ai_credits.total_ai_credits : 0)})</td>
                     <td>{fmtMoney(u.gross_amount_usd)}</td>
                     <td>{fmtMoney(u.net_amount_usd)}</td>
                   </tr>

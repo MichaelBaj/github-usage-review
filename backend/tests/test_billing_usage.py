@@ -453,6 +453,87 @@ def test_ai_credits_summary_returns_balanced_users() -> None:
     assert all(user["login"] != "high_only" for user in out["balanced_users"])
 
 
+def test_balanced_users_ranking_prioritizes_perfect_balance_and_volume() -> None:
+    """Balanced users are sorted by combined score of closeness to the 45-55% plateau and volume."""
+    # Arrange
+    db.init_db()
+    db.replace_billing_usage(
+        [
+            # User 1: total = 10, perfectly 50/50
+            # Within plateau => distance = 0 => balance_factor = 1.0 => score = log10(10) * 1.0 = 1.00
+            {
+                "date": "2026-06-01",
+                "login": "user_low_vol_perfect",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 5,
+                "net_amount_usd": 0.20,
+                "model": "Claude Opus 4.6",
+            },
+            {
+                "date": "2026-06-01",
+                "login": "user_low_vol_perfect",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 5,
+                "net_amount_usd": 0.20,
+                "model": "Claude Sonnet 4.6",
+            },
+            # User 2: total = 10000, 55/45 balance (perfect mix sample)
+            # Within plateau => distance = 0 => balance_factor = 1.0 => score = log10(10000) * 1.0 = 4.00
+            {
+                "date": "2026-06-01",
+                "login": "user_high_vol_balanced_plateau",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 5500,
+                "net_amount_usd": 220.00,
+                "model": "Claude Opus 4.6",
+            },
+            {
+                "date": "2026-06-01",
+                "login": "user_high_vol_balanced_plateau",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 4500,
+                "net_amount_usd": 180.00,
+                "model": "Claude Sonnet 4.6",
+            },
+            # User 3: total = 10000, 40/60 balance
+            # Outside plateau => high_pct = 40.0 => distance = 5.0 => balance_factor = 1 - 5/45 = 8/9 => score = 4.00 * (8/9)^2 = 3.16
+            {
+                "date": "2026-06-01",
+                "login": "user_high_vol_less_balanced",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 4000,
+                "net_amount_usd": 160.00,
+                "model": "Claude Opus 4.6",
+            },
+            {
+                "date": "2026-06-01",
+                "login": "user_high_vol_less_balanced",
+                "product": "Copilot",
+                "sku": "copilot_ai_credit",
+                "quantity": 6000,
+                "net_amount_usd": 240.00,
+                "model": "Claude Sonnet 4.6",
+            },
+        ]
+    )
+
+    # Act
+    out = analytics.ai_credits_summary(start="2026-06-01", end="2026-06-01")
+    ranked = [u["login"] for u in out["balanced_users"]]
+
+    # Assert
+    # Expected scores:
+    # user_high_vol_balanced_plateau: log10(10000) * 1.0 = 4.00
+    # user_high_vol_less_balanced: log10(10000) * (8/9)^2 = 3.16
+    # user_low_vol_perfect: log10(10) * 1.0 = 1.00
+    assert ranked == ["user_high_vol_balanced_plateau", "user_high_vol_less_balanced", "user_low_vol_perfect"]
+
+
 def test_model_tier_auto_gpt54_counts_as_high() -> None:
     """High-tier model matches should override the generic Auto:* low-tier bucket."""
     # Act + Assert
@@ -614,6 +695,7 @@ def test_ai_credits_summary_includes_headline_from_meta(billing_db: None) -> Non
     db.set_meta("ai_credit_headline_qty", "806917.98")
     db.set_meta("ai_credit_headline_net_usd", "1234.98")
     db.set_meta("ai_credit_headline_gross_usd", "8069.18")
+    db.set_meta("ai_credit_headline_period", "2026-06")
     db.set_meta("ai_credit_headline_at", "2026-06-26T12:00:00+00:00")
 
     out = analytics.ai_credits_summary(start="2026-06-01", end="2026-06-02")

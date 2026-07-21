@@ -509,6 +509,7 @@ export interface AiCreditBalancedUser {
   total_ai_credits: number;
   high_pct: number;
   low_pct: number;
+  balanced_score: number;
   models: AiCreditBalancedModelRow[];
 }
 

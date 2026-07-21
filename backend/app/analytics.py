@@ -10,6 +10,7 @@ import re
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from datetime import date as date_cls
+import math
 from typing import Any
 
 from . import db
@@ -683,7 +684,7 @@ def model_breakdown(
                 "WHERE date BETWEEN ? AND ? ORDER BY date ASC",
                 (start_iso, end_iso),
             ).fetchall()
-            
+
             # Aggregate code from raw_json into per-editor rows.
             code_by_editor: dict[str, dict[str, Any]] = {}
             for dr in day_rows:
@@ -760,7 +761,7 @@ def model_breakdown(
                 "GROUP BY editor, model",
                 (start_iso, end_iso, scope),
             ).fetchall()
-            
+
             # Combine code (per-editor) and chat (per-model) rows.
             rows = list(code_by_editor.values()) + [
                 {
@@ -2124,12 +2125,25 @@ def ai_credits_summary(
             key=lambda row: row["quantity"],
             reverse=True,
         )
+        if high_pct < 45.0:
+            distance = 45.0 - high_pct
+        elif high_pct > 55.0:
+            distance = high_pct - 55.0
+        else:
+            distance = 0.0
+
+        balance_factor = max(0.0, 1.0 - (distance / 45.0))
+        # Logarithmic volume dampening prevents massive unbalance from overshadowing perfect splits,
+        # while squaring the balance factor penalizes imbalance more sharply.
+        balanced_score = math.log10(total) * (balance_factor ** 2)
+
         balanced_users.append(
             {
                 "login": login,
                 "total_ai_credits": round(total, 2),
                 "high_pct": round(high_pct, 2),
                 "low_pct": round(low_pct, 2),
+                "balanced_score": round(balanced_score, 2),
                 "models": [
                     {
                         "model": row["model"],
@@ -2141,7 +2155,7 @@ def ai_credits_summary(
                 ],
             }
         )
-    balanced_users.sort(key=lambda row: row["total_ai_credits"], reverse=True)
+    balanced_users.sort(key=lambda row: row["balanced_score"], reverse=True)
 
     # Headline totals from the ai_credit/usage aggregate endpoint (fresher
     # than per-day row sums).  Only include when the stored period covers the
