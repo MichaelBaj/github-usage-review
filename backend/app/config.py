@@ -10,7 +10,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Calendar-date versioning (YYYY-MM-DD.build)
-VERSION = "2026-07-09.1"
+VERSION = "2026-08-06.1"
 # Billing data before this date is rejected during import.
 BILLING_MIN_DATE = "2026-06-01"
 
@@ -93,6 +93,14 @@ class Settings(BaseSettings):
     import_max_upload_mb: int = Field(
         default=25,
         description="Maximum local JSON/JSONL/NDJSON import upload size in MiB.",
+    )
+
+    admin_token: str = Field(
+        default="",
+        description=(
+            "Shared secret for admin endpoints (import, export, validate-admin). "
+            "If empty, admin endpoints return 403."
+        ),
     )
 
     # --- Budget / quota ---

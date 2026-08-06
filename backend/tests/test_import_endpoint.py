@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from app import config
 from app.main import app
 
+ADMIN_HEADERS = {"X-Admin-Token": "test-admin-token"}
+
 
 def _export_row(login: str, day: str = "2026-06-02") -> dict:
     """Build a minimal GitHub per-user-per-day export row."""
@@ -60,6 +62,7 @@ def test_import_endpoint_accepts_ndjson_upload() -> None:
         response = client.post(
             "/api/data/import-file",
             files={"file": ("export.ndjson", content, "application/x-ndjson")},
+            headers=ADMIN_HEADERS,
         )
 
     # Assert
@@ -80,6 +83,7 @@ def test_import_endpoint_rejects_unsupported_extension() -> None:
         response = client.post(
             "/api/data/import-file",
             files={"file": ("export.txt", content, "text/plain")},
+            headers=ADMIN_HEADERS,
         )
 
     # Assert
@@ -100,6 +104,7 @@ def test_import_endpoint_accepts_csv_billing_report() -> None:
         response = client.post(
             "/api/data/import-file",
             files={"file": ("AIUsageReport.csv", content, "text/csv")},
+            headers=ADMIN_HEADERS,
         )
 
     # Assert
@@ -119,6 +124,7 @@ def test_import_endpoint_rejects_invalid_file() -> None:
         response = client.post(
             "/api/data/import-file",
             files={"file": ("export.ndjson", content, "application/x-ndjson")},
+            headers=ADMIN_HEADERS,
         )
 
     # Assert
@@ -137,6 +143,7 @@ def test_import_endpoint_enforces_size_limit(monkeypatch: pytest.MonkeyPatch) ->
         response = client.post(
             "/api/data/import-file",
             files={"file": ("export.ndjson", oversized, "application/x-ndjson")},
+            headers=ADMIN_HEADERS,
         )
 
     # Assert
@@ -156,6 +163,7 @@ def test_import_endpoint_accepts_file_near_real_export_size() -> None:
         response = client.post(
             "/api/data/import-file",
             files={"file": ("part-00001.ndjson", content, "application/x-ndjson")},
+            headers=ADMIN_HEADERS,
         )
 
     # Assert
@@ -175,6 +183,7 @@ def test_import_endpoint_ndjson_with_bad_rows_returns_validation_errors() -> Non
         response = client.post(
             "/api/data/import-file",
             files={"file": ("export.ndjson", content, "application/x-ndjson")},
+            headers=ADMIN_HEADERS,
         )
 
     # Assert — partial import succeeds with validation details
