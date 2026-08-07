@@ -133,6 +133,7 @@ All settings come from environment variables (or a local `.env`).
 | `PR_CONCURRENCY` | `4` | Parallel PR-detail fetches |
 | `PR_INCLUDE_FORKS` | `false` | Whether forked repos count |
 | `PR_INCLUDE_ARCHIVED` | `false` | Whether archived repos count |
+| `ADMIN_TOKEN` | *(empty)* | Shared secret for the Imports & Exports admin tab. Generate with `./scripts/gen-admin-token.sh`. Access via `#imports-exports?admin=TOKEN` |
 | `SEED_MODE` | `false` | Disables snapshots when synthetic seed data is in use (see Fake-Data Mode) |
 | `IMPORT_MAX_UPLOAD_MB` | `25` | Max size for local `.json`, `.jsonl`, `.ndjson`, or `.csv` usage imports |
 
@@ -150,13 +151,22 @@ browser-supplied token. Supported formats:
 Import workflow:
 
 1. Obtain the export from GitHub outside this app.
-2. Open the dashboard and click **Import file** beside **Refresh snapshot**.
-3. Select a supported local file. The backend validates extension and
-   upload size, skips malformed NDJSON lines with warnings, and imports
-   valid rows.
+2. Open the dashboard at `#imports-exports?admin=YOUR_ADMIN_TOKEN` (the
+   Imports & Exports tab is only visible with a valid admin token).
+3. Click **Import file** and select a supported local file. The backend
+   validates extension and upload size, skips malformed NDJSON lines with
+   warnings, and imports valid rows.
 4. The dashboard refreshes current views and the header shows the
    unified last data load source (`api`, `json_import`,
    `csv_ai_usage_report`, or `csv_usage_report`).
+
+Alternatively, import/export from the command line without the web UI:
+
+```bash
+cd backend
+.venv/bin/python -m scripts.import_data --file path/to/export.csv
+.venv/bin/python -m scripts.export_data --output /tmp/backup.db.gz
+```
 
 Imports are idempotent at org/date scope. Re-importing the same file
 upserts the org daily row and replaces language, editor, and model rows

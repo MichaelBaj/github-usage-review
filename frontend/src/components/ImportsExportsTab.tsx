@@ -4,7 +4,6 @@ import {
   api,
   type DbImportResult,
   type ImportResult,
-  type RefreshAllJob,
   type UsageReportExport,
   type UsageReportType,
 } from "../api";
@@ -26,11 +25,6 @@ interface ImportsExportsTabProps {
   onExport: () => Promise<void>;
   onImport: (file: File | undefined) => Promise<void>;
   onUsageReportImported: (result: ImportResult) => void;
-  refreshAllJob: RefreshAllJob | null;
-  refreshAllError: string | null;
-  onStartRefreshAll: () => Promise<void>;
-  onCancelRefreshAll: () => Promise<void>;
-  onRetryRefreshAll: () => Promise<void>;
 }
 
 function usageReportAccessHint(error: string | null): string | null {
@@ -74,11 +68,6 @@ export function ImportsExportsTab({
   onExport,
   onImport,
   onUsageReportImported,
-  refreshAllJob,
-  refreshAllError,
-  onStartRefreshAll,
-  onCancelRefreshAll,
-  onRetryRefreshAll,
 }: ImportsExportsTabProps): JSX.Element {
   const [reports, setReports] = useState<UsageReportExport[]>([]);
   const [reportsLoading, setReportsLoading] = useState(false);
@@ -178,11 +167,6 @@ export function ImportsExportsTab({
   }, [reports]);
 
   const accessHint = usageReportAccessHint(reportsError);
-  const refreshAllRunning = refreshAllJob?.status === "pending" || refreshAllJob?.status === "running";
-  const showRetryRefreshAll =
-    refreshAllJob?.status === "failed"
-    || refreshAllJob?.status === "completed_with_errors"
-    || refreshAllJob?.status === "canceled";
 
   return (
     <div>
@@ -191,37 +175,9 @@ export function ImportsExportsTab({
         <div className="ops-actions">
           <button
             onClick={() => {
-              void onStartRefreshAll();
-            }}
-            disabled={refreshAllRunning || refreshing || importing || exporting}
-            className={refreshAllRunning ? "btn-busy" : undefined}
-          >
-            {refreshAllRunning ? "Refresh all in progress…" : "Refresh All Data"}
-          </button>
-          {refreshAllRunning ? (
-            <button
-              onClick={() => {
-                void onCancelRefreshAll();
-              }}
-              className="btn-danger"
-            >
-              Cancel refresh
-            </button>
-          ) : null}
-          {showRetryRefreshAll ? (
-            <button
-              onClick={() => {
-                void onRetryRefreshAll();
-              }}
-            >
-              Retry refresh all
-            </button>
-          ) : null}
-          <button
-            onClick={() => {
               void onRefresh();
             }}
-            disabled={refreshing || importing || refreshAllRunning}
+            disabled={refreshing || importing}
             className={snapshotDone === true ? "btn-success" : undefined}
           >
             {refreshing ? "Refreshing…" : snapshotDone === true ? "\u2713 Snapshot complete" : "Refresh snapshot"}
@@ -247,40 +203,6 @@ export function ImportsExportsTab({
             />
           </label>
         </div>
-
-        {refreshAllError ? <div className="error">{refreshAllError}</div> : null}
-        {refreshAllJob ? (
-          <div className="refresh-all-status">
-            <div className="refresh-all-summary">
-              <strong>Status:</strong> {refreshAllJob.status}
-              {refreshAllJob.started_at ? ` | Started: ${refreshAllJob.started_at}` : ""}
-              {refreshAllJob.finished_at ? ` | Finished: ${refreshAllJob.finished_at}` : ""}
-            </div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Data Source</th>
-                  <th>Status</th>
-                  <th>Progress</th>
-                  <th>Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {refreshAllJob.steps.map((step) => (
-                  <tr key={step.key}>
-                    <td>{step.label}</td>
-                    <td><span className={`step-badge step-${step.status}`}>{step.status}</span></td>
-                    <td>{step.message}</td>
-                    <td>{step.updated_at}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {refreshAllJob.errors.length ? (
-              <div className="warning-note">{refreshAllJob.errors.join(" | ")}</div>
-            ) : null}
-          </div>
-        ) : null}
       </div>
 
       {refreshing ? <div className="snapshot-progress"><div className="snapshot-progress-bar" /></div> : null}

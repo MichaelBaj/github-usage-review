@@ -5,7 +5,6 @@ import {
   type DbImportMode,
   type DbImportResult,
   type ImportResult,
-  type RefreshAllJob,
 } from "./api";
 import { SummaryTab } from "./components/SummaryTab";
 import { TeamsTab } from "./components/TeamsTab";
@@ -14,26 +13,37 @@ import { QualityTab } from "./components/QualityTab";
 import { ImportsExportsTab } from "./components/ImportsExportsTab";
 import { defaultWindowThisMonth, type WindowState } from "./components/DateRangeSelector";
 // Calendar-date versioning (YYYY-MM-DD.build)
-const VERSION = "2026-07-09.1";
+const VERSION = "2026-08-06.1";
 
 
 type Tab = "summary" | "teams" | "users" | "quality" | "imports-exports";
 
-const TABS: { id: Tab; label: string }[] = [
+const PUBLIC_TABS: { id: Tab; label: string }[] = [
   { id: "summary", label: "Summary" },
   { id: "quality", label: "Quality & Models" },
   { id: "teams", label: "Teams" },
   { id: "users", label: "Users" },
-  { id: "imports-exports", label: "Imports & Exports" },
 ];
 
-function tabFromHash(): Tab {
-  const h = window.location.hash.replace("#", "").split("?")[0] as Tab;
-  return TABS.some((t) => t.id === h) ? h : "summary";
+function parseHash(): { tab: string; adminToken: string } {
+  const raw = window.location.hash.replace("#", "");
+  const [path, query] = raw.split("?");
+  const params = new URLSearchParams(query ?? "");
+  return { tab: path, adminToken: params.get("admin") ?? "" };
+}
+
+function tabFromHash(isAdmin: boolean): Tab {
+  const { tab } = parseHash();
+  const allTabs: Tab[] = isAdmin
+    ? [...PUBLIC_TABS.map((t) => t.id), "imports-exports"]
+    : PUBLIC_TABS.map((t) => t.id);
+  return allTabs.includes(tab as Tab) ? (tab as Tab) : "summary";
 }
 
 export function App(): JSX.Element {
-  const [tab, setTab] = useState<Tab>(tabFromHash());
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminToken, setAdminToken] = useState("");
+  const [tab, setTab] = useState<Tab>("summary");
   const [win, setWin] = useState<WindowState>(defaultWindowThisMonth());
   const [refreshing, setRefreshing] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -59,17 +69,26 @@ export function App(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [pendingDbFile, setPendingDbFile] = useState<File | null>(null);
   const [dbImportMode, setDbImportMode] = useState<DbImportMode>("merge");
-  const [snapshotDone, setSnapshotDone] = useState<boolean | null>(null); // true=success, false=fail
-  const [refreshAllJob, setRefreshAllJob] = useState<RefreshAllJob | null>(null);
-  const [refreshAllError, setRefreshAllError] = useState<string | null>(null);
-  const [refreshAllNotice, setRefreshAllNotice] = useState<string | null>(null);
-  const [notifiedJobId, setNotifiedJobId] = useState<string | null>(null);
+  const [snapshotDone, setSnapshotDone] = useState<boolean | null>(null);
+
+  // Validate admin token from URL hash on mount
+  useEffect(() => {
+    const { adminToken: token } = parseHash();
+    if (!token) return;
+    api.validateAdminToken(token).then((valid) => {
+      if (valid) {
+        setIsAdmin(true);
+        setAdminToken(token);
+        setTab(tabFromHash(true));
+      }
+    }).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
-    const onHash = (): void => setTab(tabFromHash());
+    const onHash = (): void => setTab(tabFromHash(isAdmin));
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
-  }, []);
+  }, [isAdmin]);
 
   useEffect(() => {
     Promise.all([api.kpis({ days: 1 }), api.projections()]).then(([k, p]) =>
@@ -84,55 +103,12 @@ export function App(): JSX.Element {
     ).catch(() => undefined);
   }, [dataVersion]);
 
-  useEffect(() => {
-    let disposed = false;
-    const poll = async (): Promise<void> => {
-      try {
-        const job = await api.refreshAllStatus(refreshAllJob?.id);
-        if (disposed) return;
-        setRefreshAllJob(job);
-        if (
-          (
-            job.status === "completed"
-            || job.status === "completed_with_errors"
-            || job.status === "failed"
-            || job.status === "canceled"
-          )
-          && notifiedJobId !== job.id
-        ) {
-          setNotifiedJobId(job.id);
-          if (job.status === "completed") {
-            setRefreshAllNotice("Refresh all data completed.");
-          } else if (job.status === "completed_with_errors") {
-            setRefreshAllNotice("Refresh all data completed with errors.");
-          } else if (job.status === "canceled") {
-            setRefreshAllNotice("Refresh all data canceled.");
-          } else {
-            setRefreshAllNotice("Refresh all data failed.");
-          }
-          setDataVersion((value) => value + 1);
-        }
-      } catch {
-        // No active/known job yet.
-      }
-    };
-    void poll();
-    if (!refreshAllJob?.id) {
-      return () => {
-        disposed = true;
-      };
-    }
-    const timer = window.setInterval(() => {
-      void poll();
-    }, 5000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [refreshAllJob?.id, notifiedJobId]);
-
   function go(next: Tab): void {
-    window.location.hash = next;
+    if (next === "imports-exports" && isAdmin) {
+      window.location.hash = `${next}?admin=${adminToken}`;
+    } else {
+      window.location.hash = next;
+    }
     setTab(next);
   }
 
@@ -165,7 +141,7 @@ export function App(): JSX.Element {
     setImportResult(null);
     setDbImportResult(null);
     try {
-      const result = await api.importFile(file);
+      const result = await api.importFile(file, adminToken);
       setImportResult(result);
       setDataVersion((value) => value + 1);
     } catch (e) {
@@ -189,7 +165,7 @@ export function App(): JSX.Element {
     setImportResult(null);
     setDbImportResult(null);
     try {
-      const result = await api.importDatabase(file, dbImportMode);
+      const result = await api.importDatabase(file, dbImportMode, adminToken);
       setDbImportResult(result);
       setDataVersion((value) => value + 1);
     } catch (e) {
@@ -203,45 +179,11 @@ export function App(): JSX.Element {
     setExporting(true);
     setError(null);
     try {
-      await api.exportData();
+      await api.exportData(adminToken);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setExporting(false);
-    }
-  }
-
-  async function startRefreshAllData(): Promise<void> {
-    setRefreshAllError(null);
-    try {
-      const payload = await api.startRefreshAll({ report_types: ["ai_credit", "detailed"] });
-      setRefreshAllJob(payload.job);
-      if (payload.started) {
-        setRefreshAllNotice("Refresh all data started in background.");
-      }
-    } catch (e) {
-      setRefreshAllError((e as Error).message);
-    }
-  }
-
-  async function cancelRefreshAllData(): Promise<void> {
-    setRefreshAllError(null);
-    try {
-      const payload = await api.cancelRefreshAll(refreshAllJob?.id);
-      setRefreshAllNotice(`Refresh all cancel requested (${payload.job_id}).`);
-    } catch (e) {
-      setRefreshAllError((e as Error).message);
-    }
-  }
-
-  async function retryRefreshAllData(): Promise<void> {
-    setRefreshAllError(null);
-    try {
-      const payload = await api.retryRefreshAll({ job_id: refreshAllJob?.id });
-      setRefreshAllJob(payload.job);
-      setRefreshAllNotice("Refresh all data retried in background.");
-    } catch (e) {
-      setRefreshAllError((e as Error).message);
     }
   }
 
@@ -255,6 +197,10 @@ export function App(): JSX.Element {
   const apiLabel = lastLoad.apiAt ? lastLoad.apiAt : "never";
   const csvLabel = lastLoad.csvAt ? lastLoad.csvAt : "never";
   const jsonLabel = lastLoad.jsonAt ? lastLoad.jsonAt : "never";
+
+  const visibleTabs = isAdmin
+    ? [...PUBLIC_TABS, { id: "imports-exports" as Tab, label: "Imports & Exports" }]
+    : PUBLIC_TABS;
 
   return (
     <div className="layout">
@@ -270,15 +216,10 @@ export function App(): JSX.Element {
             </tbody>
           </table>
         </div>
-        {refreshAllJob ? (
-          <button className="refresh-chip" onClick={() => go("imports-exports")}>
-            Refresh All: {refreshAllJob.status}
-          </button>
-        ) : null}
       </div>
 
       <div className="tabs">
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t.id}
             className={tab === t.id ? "tab tab-active" : "tab"}
@@ -289,17 +230,11 @@ export function App(): JSX.Element {
         ))}
       </div>
 
-      {refreshAllNotice ? (
-        <div className="global-notice" onClick={() => setRefreshAllNotice(null)} role="status">
-          {refreshAllNotice}
-        </div>
-      ) : null}
-
       {tab === "summary" ? <SummaryTab key={`summary-${dataVersion}`} win={win} onWinChange={setWin} /> : null}
       {tab === "teams" ? <TeamsTab key={`teams-${dataVersion}`} win={win} onWinChange={setWin} /> : null}
       {tab === "users" ? <UsersTab key={`users-${dataVersion}`} win={win} onWinChange={setWin} /> : null}
       {tab === "quality" ? <QualityTab key={`quality-${dataVersion}`} win={win} onWinChange={setWin} /> : null}
-      {tab === "imports-exports" ? (
+      {tab === "imports-exports" && isAdmin ? (
         <ImportsExportsTab
           apiLabel={apiLabel}
           csvLabel={csvLabel}
@@ -317,11 +252,6 @@ export function App(): JSX.Element {
           onExport={exportData}
           onImport={importUsage}
           onUsageReportImported={handleUsageReportImported}
-          refreshAllJob={refreshAllJob}
-          refreshAllError={refreshAllError}
-          onStartRefreshAll={startRefreshAllData}
-          onCancelRefreshAll={cancelRefreshAllData}
-          onRetryRefreshAll={retryRefreshAllData}
         />
       ) : null}
 

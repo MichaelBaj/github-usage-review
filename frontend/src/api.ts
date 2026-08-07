@@ -100,46 +100,6 @@ export interface UsageReportImportResponse {
   import: ImportResult;
 }
 
-export interface RefreshAllStep {
-  key: string;
-  label: string;
-  status: "pending" | "running" | "completed" | "failed";
-  message: string;
-  updated_at: string;
-  meta?: Record<string, unknown>;
-}
-
-export interface RefreshAllJob {
-  id: string;
-  status: "pending" | "running" | "completed" | "completed_with_errors" | "failed" | "canceled";
-  started_at: string | null;
-  finished_at: string | null;
-  report_types: string[];
-  send_email: boolean;
-  created_at: string;
-  errors: string[];
-  steps: RefreshAllStep[];
-}
-
-export interface RefreshAllStartRequest {
-  report_types?: UsageReportType[];
-  send_email?: boolean;
-}
-
-export interface RefreshAllStartResponse {
-  started: boolean;
-  job: RefreshAllJob;
-}
-
-export interface RefreshAllCancelResponse {
-  canceled: boolean;
-  job_id: string;
-}
-
-export interface RefreshAllRetryRequest {
-  job_id?: string;
-}
-
 export interface TrendPoint {
   date: string;
   active_users: number;
@@ -637,10 +597,12 @@ export const api = {
     }
     return r.json();
   },
-  importFile: async (file: File): Promise<ImportResult> => {
+  importFile: async (file: File, token?: string): Promise<ImportResult> => {
     const body = new FormData();
     body.set("file", file);
-    const r = await fetch("/api/data/import-file", { method: "POST", body });
+    const headers: Record<string, string> = {};
+    if (token) headers["X-Admin-Token"] = token;
+    const r = await fetch("/api/data/import-file", { method: "POST", body, headers });
     if (!r.ok) {
       let detail = `${r.status} ${r.statusText}`;
       try {
@@ -653,8 +615,10 @@ export const api = {
     }
     return (await r.json()) as ImportResult;
   },
-  exportData: async (): Promise<void> => {
-    const r = await fetch("/api/data/export");
+  exportData: async (token?: string): Promise<void> => {
+    const headers: Record<string, string> = {};
+    if (token) headers["X-Admin-Token"] = token;
+    const r = await fetch("/api/data/export", { headers });
     if (!r.ok) throw new Error(`export failed: ${r.status} ${r.statusText}`);
     const blob = await r.blob();
     const disposition = r.headers.get("Content-Disposition") ?? "";
@@ -669,10 +633,12 @@ export const api = {
     anchor.remove();
     URL.revokeObjectURL(url);
   },
-  importDatabase: async (file: File, mode: DbImportMode): Promise<DbImportResult> => {
+  importDatabase: async (file: File, mode: DbImportMode, token?: string): Promise<DbImportResult> => {
     const body = new FormData();
     body.set("file", file);
-    const r = await fetch(`/api/data/import-db?mode=${mode}`, { method: "POST", body });
+    const headers: Record<string, string> = {};
+    if (token) headers["X-Admin-Token"] = token;
+    const r = await fetch(`/api/data/import-db?mode=${mode}`, { method: "POST", body, headers });
     if (!r.ok) {
       let detail = `${r.status} ${r.statusText}`;
       try {
@@ -747,62 +713,15 @@ export const api = {
     }
     return (await r.json()) as UsageReportImportResponse;
   },
-  startRefreshAll: async (req: RefreshAllStartRequest = {}): Promise<RefreshAllStartResponse> => {
-    const r = await fetch("/api/refresh-all/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req),
-    });
-    if (!r.ok) {
-      let detail = `${r.status} ${r.statusText}`;
-      try {
-        const payload = (await r.json()) as { detail?: string };
-        detail = payload.detail ?? detail;
-      } catch {
-        // Keep the HTTP status fallback.
-      }
-      throw new Error(`refresh-all start failed: ${detail}`);
+  validateAdminToken: async (token: string): Promise<boolean> => {
+    try {
+      const r = await fetch(`/api/auth/validate-admin?token=${encodeURIComponent(token)}`);
+      if (!r.ok) return false;
+      const payload = (await r.json()) as { valid?: boolean };
+      return payload.valid === true;
+    } catch {
+      return false;
     }
-    return (await r.json()) as RefreshAllStartResponse;
-  },
-  refreshAllStatus: async (jobId?: string): Promise<RefreshAllJob> => {
-    const path = jobId
-      ? `/api/refresh-all/status/${encodeURIComponent(jobId)}`
-      : "/api/refresh-all/status";
-    return getJson<RefreshAllJob>(path);
-  },
-  cancelRefreshAll: async (jobId?: string): Promise<RefreshAllCancelResponse> => {
-    const suffix = jobId ? `?job_id=${encodeURIComponent(jobId)}` : "";
-    const r = await fetch(`/api/refresh-all/cancel${suffix}`, { method: "POST" });
-    if (!r.ok) {
-      let detail = `${r.status} ${r.statusText}`;
-      try {
-        const payload = (await r.json()) as { detail?: string };
-        detail = payload.detail ?? detail;
-      } catch {
-        // Keep the HTTP status fallback.
-      }
-      throw new Error(`refresh-all cancel failed: ${detail}`);
-    }
-    return (await r.json()) as RefreshAllCancelResponse;
-  },
-  retryRefreshAll: async (req?: RefreshAllRetryRequest): Promise<RefreshAllStartResponse> => {
-    const r = await fetch("/api/refresh-all/retry", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(req ?? {}),
-    });
-    if (!r.ok) {
-      let detail = `${r.status} ${r.statusText}`;
-      try {
-        const payload = (await r.json()) as { detail?: string };
-        detail = payload.detail ?? detail;
-      } catch {
-        // Keep the HTTP status fallback.
-      }
-      throw new Error(`refresh-all retry failed: ${detail}`);
-    }
-    return (await r.json()) as RefreshAllStartResponse;
   },
 };
 
