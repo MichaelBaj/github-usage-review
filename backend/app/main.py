@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -11,7 +12,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -52,6 +53,20 @@ def _require_github_token_for_feature(feature_name: str) -> str:
         status_code=400,
         detail=f"{feature_name} requires GitHub auth. Configure GITHUB_TOKEN.",
     )
+
+
+def _require_admin_token(
+    request: Request,
+    x_admin_token: str | None = None,
+) -> None:
+    """Validate admin token from header or query param. Raises 401/403."""
+    if not settings.admin_token:
+        raise HTTPException(status_code=403, detail="Admin access is disabled (no ADMIN_TOKEN configured).")
+    provided = x_admin_token or request.query_params.get("token") or ""
+    if not provided:
+        raise HTTPException(status_code=401, detail="Admin token required.")
+    if not hmac.compare_digest(provided, settings.admin_token):
+        raise HTTPException(status_code=401, detail="Invalid admin token.")
 
 
 class UsageReportCreateRequest(BaseModel):
@@ -353,6 +368,16 @@ def health() -> dict[str, Any]:
     }
 
 
+@app.get("/api/auth/validate-admin")
+def validate_admin(token: str = Query("")) -> dict[str, bool]:
+    """Validate an admin token without side effects."""
+    if not settings.admin_token:
+        raise HTTPException(status_code=403, detail="Admin access is disabled.")
+    if not token or not hmac.compare_digest(token, settings.admin_token):
+        raise HTTPException(status_code=401, detail="Invalid admin token.")
+    return {"valid": True}
+
+
 @app.get("/api/kpis")
 def get_kpis(
     days: int | None = None,
@@ -624,8 +649,13 @@ async def trigger_snapshot() -> dict[str, Any]:
 
 
 @app.post("/api/data/import-file")
-async def import_file(file: UploadFile = IMPORT_UPLOAD) -> dict[str, Any]:
+async def import_file(
+    request: Request,
+    file: UploadFile = IMPORT_UPLOAD,
+    x_admin_token: str | None = Header(None),
+) -> dict[str, Any]:
     """Import a local JSON/JSONL/NDJSON Copilot usage export upload."""
+    _require_admin_token(request, x_admin_token)
     filename = file.filename or ""
     max_bytes = max(1, settings.import_max_upload_mb) * 1024 * 1024
     chunks: list[bytes] = []
@@ -651,8 +681,12 @@ async def import_file(file: UploadFile = IMPORT_UPLOAD) -> dict[str, Any]:
 
 
 @app.get("/api/data/export")
-def export_database() -> Response:
+def export_database(
+    request: Request,
+    x_admin_token: str | None = Header(None),
+) -> Response:
     """Export the entire database as a single gzip-compressed SQLite file."""
+    _require_admin_token(request, x_admin_token)
     payload = db.export_database_gzip()
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     filename = f"copilot-usage-export-{stamp}.db.gz"
@@ -665,10 +699,13 @@ def export_database() -> Response:
 
 @app.post("/api/data/import-db")
 async def import_database(
+    request: Request,
     file: UploadFile = IMPORT_UPLOAD,
     mode: str = Query("merge", pattern="^(replace|merge)$"),
+    x_admin_token: str | None = Header(None),
 ) -> dict[str, Any]:
     """Import a full-database export, replacing or merging into the live DB."""
+    _require_admin_token(request, x_admin_token)
     max_bytes = max(1, settings.import_max_upload_mb) * 1024 * 1024
     chunks: list[bytes] = []
     total = 0

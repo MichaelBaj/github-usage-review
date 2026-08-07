@@ -18,4 +18,5 @@ def isolated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pat
 
     db_file = tmp_path / "test.db"
     monkeypatch.setattr(config.settings, "db_path", str(db_file))
+    monkeypatch.setattr(config.settings, "admin_token", "test-admin-token")
     yield db_file
