@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM docker.artifactory.ssn.juniper.net/python:3.12-slim
 
 WORKDIR /app
 COPY requirements.txt .
