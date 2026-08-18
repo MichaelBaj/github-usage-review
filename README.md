@@ -452,6 +452,36 @@ rows stay put. Re-run the seeder any time to reset.
 - The dashboard has no auth out of the box. Run it on a trusted network,
   or front it with an authenticating reverse proxy before exposing it.
 
+
+## Publishing container images
+
+To publish new container images use the the `build_and_publish.sh` script.
+
+Prior to running the script you will need to authenticate with artifactory
+using an identity token. You can generate them here: https://artifactory.ssn.juniper.net/ui/user_profile
+
+This only needs to be done once, docker will store your token for future use.
+
+The script uses the versions stored in code to tag the newly built container images.
+
+```bash
+# authenticate with artifactory
+docker login docker-tools.artifactory.ssn.juniper.net
+
+./scripts/build_and_publish.sh
+Building docker-tools.artifactory.ssn.juniper.net/copilot-review-frontend:2026-08-06.1 from github-usage-review/frontend
+Building docker-tools.artifactory.ssn.juniper.net/copilot-review-backend:2026-08-06.1 from github-usage-review/backend
+Do you want to continue? (y/N): y
+
+Building and publishing Docker images for copilot-review...
+...                                                      0.0s
+Pushing docker-tools.artifactory.ssn.juniper.net/copilot-review-frontend:2026-08-06.1
+...
+Pushing docker-tools.artifactory.ssn.juniper.net/copilot-review-backend:2026-08-06.1
+...
+Done
+```
+
 ## Decisions
 
 - [`docs/adr/0001-stack-and-architecture.md`](docs/adr/0001-stack-and-architecture.md)
