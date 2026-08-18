@@ -26,7 +26,7 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
-_DOWNLOAD_RETRIES = 3
+_DOWNLOAD_RETRIES = 5
 _DOWNLOAD_BACKOFF = 2.0
 ACCEPT = "application/vnd.github+json"
 API_VERSION = "2022-11-28"
@@ -144,21 +144,22 @@ class GitHubClient:
                     response = await plain.get(download_url)
                 response.raise_for_status()
                 return response.text
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 last_exc = exc
                 logger.warning(
-                    "Report download attempt %d/%d failed (ConnectError): %s",
+                    "Report download attempt %d/%d failed (%s): %s",
                     attempt,
                     _DOWNLOAD_RETRIES,
+                    type(exc).__name__,
                     exc,
                 )
                 if attempt < _DOWNLOAD_RETRIES:
-                    await asyncio.sleep(_DOWNLOAD_BACKOFF * attempt)
+                    await asyncio.sleep(_DOWNLOAD_BACKOFF * (2 ** (attempt - 1)))
         raise httpx.ConnectError(
             f"Failed to download report after {_DOWNLOAD_RETRIES} attempts. "
-            "This is usually a TLS/network issue inside the container — "
-            "try rebuilding with `docker compose build --no-cache backend` "
-            "to refresh CA certificates."
+            "The signed report host remained unreachable; retry the snapshot "
+            "and verify outbound HTTPS and DNS from the backend container if "
+            "the failure persists."
         ) from last_exc
 
     @staticmethod

@@ -1,8 +1,10 @@
 services:
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        DOCKER_REGISTRY_PREFIX: ${DOCKER_REGISTRY_PREFIX:-}
     env_file: .env
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app", "--reload-dir", "/app/scripts"]
     environment:
       DB_PATH: /data/copilot.db
       CORS_ALLOW_ORIGINS: '["http://localhost:${FRONTEND_PORT:-8080}"]'

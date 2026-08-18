@@ -1,4 +1,5 @@
-FROM docker.artifactory.ssn.juniper.net/python:3.12-slim
+ARG DOCKER_REGISTRY_PREFIX=""
+FROM ${DOCKER_REGISTRY_PREFIX}python:3.12-slim
 
 WORKDIR /app
 COPY requirements.txt .
@@ -7,3 +8,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
 EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
