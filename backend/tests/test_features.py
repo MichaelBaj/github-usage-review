@@ -34,7 +34,7 @@ def _seed_feature_data() -> None:
 def test_features_endpoint_returns_aggregated_features() -> None:
     """GET /api/features returns summed feature metrics across the window."""
     _seed_feature_data()
-    resp = client.get("/api/features?days=30")
+    resp = client.get("/api/features?start=2026-06-14&end=2026-06-15")
     assert resp.status_code == 200
     data = resp.json()
     assert "features" in data

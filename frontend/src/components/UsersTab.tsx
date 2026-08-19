@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type UserDetail, type UserRow } from "../api";
 import { DateRangeSelector, toWindowParams, type WindowState } from "./DateRangeSelector";
-import { fmtMoney, fmtNum, Kpi } from "./TeamsTab";
+import { fmtMoney, fmtNum, fmtPct, Kpi } from "./TeamsTab";
 import {
   BarChart,
   Bar,
@@ -67,6 +67,7 @@ export function UsersTab({ win, onWinChange }: { win: WindowState; onWinChange: 
   });
 
   const creditDataAvailable = users.some((u) => u.ai_credits > 0);
+  const totalCredits = users.reduce((s, u) => s + u.ai_credits, 0);
 
   function toggleSort(col: SortCol): void {
     if (sortCol === col) {
@@ -144,7 +145,7 @@ export function UsersTab({ win, onWinChange }: { win: WindowState; onWinChange: 
                   </td>
                   <td>{u.prs}</td>
                   <td>{u.net_lines.toLocaleString()}</td>
-                  <td>{creditDataAvailable ? fmtNum(u.ai_credits) : <span className="muted">—</span>}</td>
+                  <td>{creditDataAvailable ? `${fmtNum(u.ai_credits)} (${fmtPct(totalCredits > 0 ? u.ai_credits / totalCredits : 0)})` : <span className="muted">—</span>}</td>
                 </tr>
               ))}
             </tbody>
@@ -415,8 +416,8 @@ function ModelUsagePanel({ detail }: { detail: UserDetail }): JSX.Element {
     topModelShare >= 0.8
       ? "single-model"
       : topModelShare >= 0.5
-      ? "dominant model"
-      : "diversified";
+        ? "dominant model"
+        : "diversified";
 
   return (
     <div className="panel">

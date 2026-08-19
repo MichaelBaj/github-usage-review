@@ -74,48 +74,48 @@ export function TeamsTab({ win, onWinChange }: { win: WindowState; onWinChange: 
       {error ? <div className="error">{error}</div> : null}
       <div className="split">
         <div style={{ minWidth: 320, display: "flex", flexDirection: "column", gap: 16 }}>
-        <div className="panel">
-          <h2>Teams</h2>
-          <div className="muted" style={{ marginBottom: 8 }}>
-            Derived from per-user data (seat activity + billing) rolled up by team membership.
-            Import a billing CSV covering this period to see AI credit attribution.
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th className="sortable-th" onClick={() => toggleSort("team")}>Team{sortIndicator("team")}</th>
-                <th className="sortable-th" onClick={() => toggleSort("members_total")}>Members{sortIndicator("members_total")}</th>
-                <th className="sortable-th" onClick={() => toggleSort("active_members")}>Active{sortIndicator("active_members")}</th>
-                <th className="sortable-th" onClick={() => toggleSort("ai_credits")}>AI Credits{sortIndicator("ai_credits")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((t) => (
-                <tr
-                  key={t.team}
-                  className={t.team === selected ? "row-selected" : undefined}
-                  onClick={() => setSelected(t.team)}
-                  style={{ cursor: "pointer" }}
-                >
-                  <td>{t.team}</td>
-                  <td>{t.members_total}</td>
-                  <td>
-                    {t.active_members}
-                    {t.members_with_seats ? ` (${(t.adoption_rate * 100).toFixed(0)}%)` : ""}
-                  </td>
-                  <td>{t.credit_data_available ? fmtNum(t.ai_credits) : <span className="muted">—</span>}</td>
-                </tr>
-              ))}
-              {sorted.length === 0 ? (
+          <div className="panel">
+            <h2>Teams</h2>
+            <div className="muted" style={{ marginBottom: 8 }}>
+              Derived from per-user data (seat activity + billing) rolled up by team membership.
+              Import a billing CSV covering this period to see AI credit attribution.
+            </div>
+            <table>
+              <thead>
                 <tr>
-                  <td colSpan={4} className="muted">
-                    No teams synced. Check that the PAT has read:org.
-                  </td>
+                  <th className="sortable-th" onClick={() => toggleSort("team")}>Team{sortIndicator("team")}</th>
+                  <th className="sortable-th" onClick={() => toggleSort("members_total")}>Members{sortIndicator("members_total")}</th>
+                  <th className="sortable-th" onClick={() => toggleSort("active_members")}>Active{sortIndicator("active_members")}</th>
+                  <th className="sortable-th" onClick={() => toggleSort("ai_credits")}>AI Credits{sortIndicator("ai_credits")}</th>
                 </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {sorted.map((t) => (
+                  <tr
+                    key={t.team}
+                    className={t.team === selected ? "row-selected" : undefined}
+                    onClick={() => setSelected(t.team)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    <td>{t.team}</td>
+                    <td>{t.members_total}</td>
+                    <td>
+                      {t.active_members}
+                      {t.members_with_seats ? ` (${(t.adoption_rate * 100).toFixed(0)}%)` : ""}
+                    </td>
+                    <td>{t.credit_data_available ? fmtNum(t.ai_credits) : <span className="muted">—</span>}</td>
+                  </tr>
+                ))}
+                {sorted.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="muted">
+                      No teams synced. Check that the PAT has read:org.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
           {detail ? (
             <div className="panel">
               <h2>PR Activity — {detail.team}</h2>
@@ -619,7 +619,7 @@ export function AiCreditsTeamBlock({
             data.top_users.map((u) => (
               <tr key={u.login}>
                 <td><a href={`#users?user=${encodeURIComponent(u.login)}`}>{u.login}</a></td>
-                <td>{fmtNum(u.ai_credits)}</td>
+                <td>{fmtNum(u.ai_credits)} ({fmtPct(data.ai_credits > 0 ? u.ai_credits / data.ai_credits : 0)})</td>
                 <td>{fmtMoney(u.net_amount_usd)}</td>
               </tr>
             ))

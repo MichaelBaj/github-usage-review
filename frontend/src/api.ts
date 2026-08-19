@@ -475,6 +475,7 @@ export interface AiCreditBalancedUser {
   total_ai_credits: number;
   high_pct: number;
   low_pct: number;
+  balanced_score: number;
   models: AiCreditBalancedModelRow[];
 }
 
@@ -551,9 +552,17 @@ export interface AiCreditsProjection {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const r = await fetch(path);
-  if (!r.ok) throw new Error(`${path}: ${r.status} ${r.statusText}`);
+  // Prepend base path so API requests resolve under the same base prefix (/copilot/api/...)
+  const prefix = import.meta.env.BASE_URL.replace(/\/$/, "");
+  const fullPath = path.startsWith("/api") ? `${prefix}${path}` : path;
+  const r = await fetch(fullPath);
+  if (!r.ok) throw new Error(`${fullPath}: ${r.status} ${r.statusText}`);
   return (await r.json()) as T;
+}
+
+function apiPath(path: string): string {
+  const prefix = import.meta.env.BASE_URL.replace(/\/$/, "");
+  return path.startsWith("/api") ? `${prefix}${path}` : path;
 }
 
 export const api = {
@@ -589,7 +598,7 @@ export const api = {
     getJson<AiCreditsProjection>("/api/ai-credits/projection"),
   projections: () => getJson<Projections>("/api/projections"),
   runSnapshot: async (): Promise<unknown> => {
-    const r = await fetch("/api/snapshot/run", { method: "POST" });
+    const r = await fetch(apiPath("/api/snapshot/run"), { method: "POST" });
     if (!r.ok) {
       let detail = `${r.status} ${r.statusText}`;
       try {
@@ -607,7 +616,7 @@ export const api = {
     body.set("file", file);
     const headers: Record<string, string> = {};
     if (token) headers["X-Admin-Token"] = token;
-    const r = await fetch("/api/data/import-file", { method: "POST", body, headers });
+    const r = await fetch(apiPath("/api/data/import-file"), { method: "POST", body, headers });
     if (!r.ok) {
       let detail = `${r.status} ${r.statusText}`;
       try {
@@ -623,7 +632,7 @@ export const api = {
   exportData: async (token?: string): Promise<void> => {
     const headers: Record<string, string> = {};
     if (token) headers["X-Admin-Token"] = token;
-    const r = await fetch("/api/data/export", { headers });
+    const r = await fetch(apiPath("/api/data/export"), { headers });
     if (!r.ok) throw new Error(`export failed: ${r.status} ${r.statusText}`);
     const blob = await r.blob();
     const disposition = r.headers.get("Content-Disposition") ?? "";
@@ -643,7 +652,7 @@ export const api = {
     body.set("file", file);
     const headers: Record<string, string> = {};
     if (token) headers["X-Admin-Token"] = token;
-    const r = await fetch(`/api/data/import-db?mode=${mode}`, { method: "POST", body, headers });
+    const r = await fetch(apiPath(`/api/data/import-db?mode=${mode}`), { method: "POST", body, headers });
     if (!r.ok) {
       let detail = `${r.status} ${r.statusText}`;
       try {
@@ -658,7 +667,7 @@ export const api = {
   },
   listUsageReports: () => getJson<UsageReportListResponse>("/api/usage-reports"),
   createUsageReport: async (req: UsageReportCreateRequest): Promise<UsageReportExport> => {
-    const r = await fetch("/api/usage-reports", {
+    const r = await fetch(apiPath("/api/usage-reports"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req),
@@ -678,7 +687,7 @@ export const api = {
   getUsageReport: (reportId: string) =>
     getJson<UsageReportExport>(`/api/usage-reports/${encodeURIComponent(reportId)}`),
   downloadUsageReport: async (reportId: string): Promise<void> => {
-    const r = await fetch(`/api/usage-reports/${encodeURIComponent(reportId)}/download`);
+    const r = await fetch(apiPath(`/api/usage-reports/${encodeURIComponent(reportId)}/download`));
     if (!r.ok) {
       let detail = `${r.status} ${r.statusText}`;
       try {
@@ -703,7 +712,7 @@ export const api = {
     URL.revokeObjectURL(url);
   },
   importUsageReport: async (reportId: string): Promise<UsageReportImportResponse> => {
-    const r = await fetch(`/api/usage-reports/${encodeURIComponent(reportId)}/import`, {
+    const r = await fetch(apiPath(`/api/usage-reports/${encodeURIComponent(reportId)}/import`), {
       method: "POST",
     });
     if (!r.ok) {
@@ -720,7 +729,7 @@ export const api = {
   },
   validateAdminToken: async (token: string): Promise<boolean> => {
     try {
-      const r = await fetch(`/api/auth/validate-admin?token=${encodeURIComponent(token)}`);
+      const r = await fetch(apiPath(`/api/auth/validate-admin?token=${encodeURIComponent(token)}`));
       if (!r.ok) return false;
       const payload = (await r.json()) as { valid?: boolean };
       return payload.valid === true;

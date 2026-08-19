@@ -115,6 +115,7 @@ function BalancedUsersTable({ users }: { users: AiCreditBalancedUser[] }): JSX.E
       total: user.total_ai_credits,
       highPct: user.high_pct,
       lowPct: user.low_pct,
+      score: user.balanced_score,
       model: m.model,
       quantity: m.quantity,
       pct: m.pct,
@@ -132,6 +133,7 @@ function BalancedUsersTable({ users }: { users: AiCreditBalancedUser[] }): JSX.E
           <th className="num-col">Total</th>
           <th className="num-col">High %</th>
           <th className="num-col">Low %</th>
+          <th className="num-col">Balance Score</th>
           <th>Model</th>
           <th className="num-col">Quantity</th>
           <th className="num-col">Percentage</th>
@@ -145,6 +147,7 @@ function BalancedUsersTable({ users }: { users: AiCreditBalancedUser[] }): JSX.E
             {r.showUser ? <td className="num-col" rowSpan={r.rowSpan}>{fmtNum(r.total)}</td> : null}
             {r.showUser ? <td className="num-col" rowSpan={r.rowSpan}>{r.highPct.toFixed(0)}%</td> : null}
             {r.showUser ? <td className="num-col" rowSpan={r.rowSpan}>{r.lowPct.toFixed(0)}%</td> : null}
+            {r.showUser ? <td className="num-col" rowSpan={r.rowSpan}>{fmtNum(r.score)}</td> : null}
             <td>{r.model}</td>
             <td className="num-col">{fmtNum(r.quantity)}</td>
             <td className="num-col">{r.pct.toFixed(2)}%</td>
@@ -256,9 +259,9 @@ export function SummaryTab({ win, onWinChange }: { win: WindowState; onWinChange
                   sub={
                     state.premium && state.premium.available
                       ? fmtMoney(
-                          state.premium.headline_ai_credit_cost_usd
-                            ?? state.premium.total_ai_credit_cost_usd,
-                        )
+                        state.premium.headline_ai_credit_cost_usd
+                        ?? state.premium.total_ai_credit_cost_usd,
+                      )
                       : "billing API unavailable"
                   }
                   tooltip={
