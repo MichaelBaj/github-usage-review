@@ -43,6 +43,12 @@ export interface Kpis {
   last_csv_load_source: string | null;
   last_json_load_at: string | null;
   last_json_load_source: string | null;
+  last_api_json_load_at: string | null;
+  last_github_export_ndjson_load_at: string | null;
+  last_csv_usage_report_load_at: string | null;
+  last_csv_ai_usage_report_load_at: string | null;
+  last_db_export_load_at: string | null;
+  last_db_export_load_source: string | null;
 }
 
 export interface ImportResult {

@@ -364,6 +364,12 @@ def health() -> dict[str, Any]:
         "last_csv_load_source": db.get_meta("last_csv_load_source"),
         "last_json_load_at": db.get_meta("last_json_load_at"),
         "last_json_load_source": db.get_meta("last_json_load_source"),
+        "last_api_json_load_at": db.get_meta("last_api_json_load_at"),
+        "last_github_export_ndjson_load_at": db.get_meta("last_github_export_ndjson_load_at"),
+        "last_csv_usage_report_load_at": db.get_meta("last_csv_usage_report_load_at"),
+        "last_csv_ai_usage_report_load_at": db.get_meta("last_csv_ai_usage_report_load_at"),
+        "last_db_export_load_at": db.get_meta("last_db_export_load_at"),
+        "last_db_export_load_source": db.get_meta("last_db_export_load_source"),
         "version": VERSION,
     }
 
@@ -730,8 +736,11 @@ async def import_database(
         result = db.import_database(content, mode)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    db.set_meta("last_data_load_at", datetime.now(UTC).isoformat())
+    imported_at = datetime.now(UTC).isoformat()
+    db.set_meta("last_data_load_at", imported_at)
     db.set_meta("last_data_load_source", f"db-export ({mode})")
+    db.set_meta("last_db_export_load_at", imported_at)
+    db.set_meta("last_db_export_load_source", f"db-export ({mode})")
     tables = result["tables"]
     return {
         "source_type": "db_export",

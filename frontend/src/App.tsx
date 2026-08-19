@@ -13,7 +13,7 @@ import { QualityTab } from "./components/QualityTab";
 import { ImportsExportsTab } from "./components/ImportsExportsTab";
 import { defaultWindowThisMonth, type WindowState } from "./components/DateRangeSelector";
 // Calendar-date versioning (YYYY-MM-DD.build)
-const VERSION = "2026-08-18.1";
+const VERSION = "2026-08-19.1";
 
 
 type Tab = "summary" | "teams" | "users" | "quality" | "imports-exports";
@@ -55,6 +55,12 @@ export function App(): JSX.Element {
     csvSource: string | null;
     jsonAt: string | null;
     jsonSource: string | null;
+    apiJsonAt: string | null;
+    exportNdjsonAt: string | null;
+    csvUsageReportAt: string | null;
+    csvAiUsageReportAt: string | null;
+    dbExportAt: string | null;
+    dbExportSource: string | null;
     historyDays: number | null;
   }>({
     apiAt: null,
@@ -62,6 +68,12 @@ export function App(): JSX.Element {
     csvSource: null,
     jsonAt: null,
     jsonSource: null,
+    apiJsonAt: null,
+    exportNdjsonAt: null,
+    csvUsageReportAt: null,
+    csvAiUsageReportAt: null,
+    dbExportAt: null,
+    dbExportSource: null,
     historyDays: null,
   });
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
@@ -98,6 +110,12 @@ export function App(): JSX.Element {
         csvSource: k.last_csv_load_source ?? null,
         jsonAt: k.last_json_load_at ?? null,
         jsonSource: k.last_json_load_source ?? null,
+        apiJsonAt: k.last_api_json_load_at ?? null,
+        exportNdjsonAt: k.last_github_export_ndjson_load_at ?? null,
+        csvUsageReportAt: k.last_csv_usage_report_load_at ?? null,
+        csvAiUsageReportAt: k.last_csv_ai_usage_report_load_at ?? null,
+        dbExportAt: k.last_db_export_load_at ?? null,
+        dbExportSource: k.last_db_export_load_source ?? null,
         historyDays: p.available ? (p.history_days ?? null) : null,
       }),
     ).catch(() => undefined);
@@ -194,9 +212,14 @@ export function App(): JSX.Element {
     setDataVersion((value) => value + 1);
   }
 
-  const apiLabel = lastLoad.apiAt ? lastLoad.apiAt : "never";
-  const csvLabel = lastLoad.csvAt ? lastLoad.csvAt : "never";
-  const jsonLabel = lastLoad.jsonAt ? lastLoad.jsonAt : "never";
+  const dataLoadEntries: Array<{ name: string; dataType: string; lastLoaded: string; source: string }> = [
+    { name: "GitHub API Snapshot", dataType: "API", lastLoaded: lastLoad.apiAt ?? "never", source: "api" },
+    { name: "Copilot Usage Insight", dataType: "NDJSON", lastLoaded: lastLoad.apiJsonAt ?? "never", source: "api_json" },
+    { name: "Code Generation Insight", dataType: "NDJSON", lastLoaded: lastLoad.exportNdjsonAt ?? "never", source: "github_export_ndjson" },
+    { name: "Metered Usage Billing", dataType: "CSV", lastLoaded: lastLoad.csvUsageReportAt ?? "never", source: "csv_usage_report" },
+    { name: "AI Usage Billing", dataType: "CSV", lastLoaded: lastLoad.csvAiUsageReportAt ?? "never", source: "csv_ai_usage_report" },
+    { name: "Copilot Usage Export", dataType: "DB", lastLoaded: lastLoad.dbExportAt ?? "never", source: lastLoad.dbExportSource ?? "db-export" },
+  ];
 
   const visibleTabs = isAdmin
     ? [...PUBLIC_TABS, { id: "imports-exports" as Tab, label: "Imports & Exports" }]
@@ -236,11 +259,7 @@ export function App(): JSX.Element {
       {tab === "quality" ? <QualityTab key={`quality-${dataVersion}`} win={win} onWinChange={setWin} /> : null}
       {tab === "imports-exports" && isAdmin ? (
         <ImportsExportsTab
-          apiLabel={apiLabel}
-          csvLabel={csvLabel}
-          jsonLabel={jsonLabel}
-          csvSource={lastLoad.csvSource}
-          jsonSource={lastLoad.jsonSource}
+          dataLoadEntries={dataLoadEntries}
           refreshing={refreshing}
           importing={importing}
           exporting={exporting}

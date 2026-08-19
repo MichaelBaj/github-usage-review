@@ -103,6 +103,9 @@ def import_usage_file(filename: str, content: bytes) -> dict[str, Any]:
     else:
         db.set_meta("last_json_load_at", imported_at)
         db.set_meta("last_json_load_source", data_load_source)
+
+    source_type_key = summary["source_type"]
+    db.set_meta(f"last_{source_type_key}_load_at", imported_at)
     return summary
 
 

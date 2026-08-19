@@ -8,12 +8,15 @@ import {
   type UsageReportType,
 } from "../api";
 
+export interface DataLoadEntry {
+  name: string;
+  dataType: string;
+  lastLoaded: string;
+  source: string;
+}
+
 interface ImportsExportsTabProps {
-  apiLabel: string;
-  csvLabel: string;
-  jsonLabel: string;
-  csvSource: string | null;
-  jsonSource: string | null;
+  dataLoadEntries: DataLoadEntry[];
   refreshing: boolean;
   importing: boolean;
   exporting: boolean;
@@ -52,11 +55,7 @@ function usageReportAccessHint(error: string | null): string | null {
 }
 
 export function ImportsExportsTab({
-  apiLabel,
-  csvLabel,
-  jsonLabel,
-  csvSource,
-  jsonSource,
+  dataLoadEntries,
   refreshing,
   importing,
   exporting,
@@ -229,27 +228,21 @@ export function ImportsExportsTab({
         <table>
           <thead>
             <tr>
+              <th>Data Source</th>
               <th>Data Type</th>
               <th>Last Loaded</th>
               <th>Source</th>
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td>API</td>
-              <td>{apiLabel}</td>
-              <td>GitHub API snapshot</td>
-            </tr>
-            <tr>
-              <td>CSV</td>
-              <td>{csvLabel}</td>
-              <td>{csvSource ?? "n/a"}</td>
-            </tr>
-            <tr>
-              <td>JSON</td>
-              <td>{jsonLabel}</td>
-              <td>{jsonSource ?? "n/a"}</td>
-            </tr>
+            {dataLoadEntries.map((entry) => (
+              <tr key={entry.name}>
+                <td>{entry.name}</td>
+                <td>{entry.dataType}</td>
+                <td>{entry.lastLoaded}</td>
+                <td>{entry.source}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
