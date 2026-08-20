@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type UserDetail, type UserRow } from "../api";
 import { DateRangeSelector, toWindowParams, type WindowState } from "./DateRangeSelector";
 import { fmtMoney, fmtNum, fmtPct, Kpi } from "./TeamsTab";
@@ -48,13 +48,13 @@ export function UsersTab({ win, onWinChange }: { win: WindowState; onWinChange: 
       .catch((e: Error) => setError(e.message));
   }, [selected, win.start, win.end]);
 
-  const filtered = users.filter((u) => {
+  const filtered = useMemo(() => users.filter((u) => {
     if (filter !== "all" && u.status !== filter) return false;
     if (query && !u.login.toLowerCase().includes(query.toLowerCase())) return false;
     return true;
-  });
+  }), [users, filter, query]);
 
-  const sorted = [...filtered].sort((a, b) => {
+  const sorted = useMemo(() => [...filtered].sort((a, b) => {
     const va = a[sortCol];
     const vb = b[sortCol];
     let cmp: number;
@@ -64,10 +64,10 @@ export function UsersTab({ win, onWinChange }: { win: WindowState; onWinChange: 
       cmp = (va as number) - (vb as number);
     }
     return sortDir === "asc" ? cmp : -cmp;
-  });
+  }), [filtered, sortCol, sortDir]);
 
-  const creditDataAvailable = users.some((u) => u.ai_credits > 0);
-  const totalCredits = users.reduce((s, u) => s + u.ai_credits, 0);
+  const creditDataAvailable = useMemo(() => users.some((u) => u.ai_credits > 0), [users]);
+  const totalCredits = useMemo(() => users.reduce((s, u) => s + u.ai_credits, 0), [users]);
 
   function toggleSort(col: SortCol): void {
     if (sortCol === col) {

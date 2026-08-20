@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type CodeEditorRow, type ModelBreakdown, type TeamDetail, type TeamRow } from "../api";
 import { DateRangeSelector, toWindowParams, type WindowState } from "./DateRangeSelector";
 import {
@@ -33,7 +33,7 @@ export function TeamsTab({ win, onWinChange }: { win: WindowState; onWinChange: 
       .catch((e: Error) => setError(e.message));
   }, [win.start, win.end]);
 
-  const sorted = [...teams].sort((a, b) => {
+  const sorted = useMemo(() => [...teams].sort((a, b) => {
     const va = a[sortCol];
     const vb = b[sortCol];
     let cmp: number;
@@ -43,7 +43,7 @@ export function TeamsTab({ win, onWinChange }: { win: WindowState; onWinChange: 
       cmp = (va as number) - (vb as number);
     }
     return sortDir === "asc" ? cmp : -cmp;
-  });
+  }), [teams, sortCol, sortDir]);
 
   function toggleSort(col: TeamSortCol): void {
     if (sortCol === col) {
