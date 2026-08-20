@@ -17,6 +17,7 @@ services:
   frontend:
     build:
       context: ./frontend
+      target: dev
     environment:
       VITE_API_TARGET: http://backend:8000
     depends_on:
