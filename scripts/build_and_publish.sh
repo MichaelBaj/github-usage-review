@@ -30,7 +30,7 @@ fi
 echo "Building and publishing Docker images for copilot-review..."
 
 # Build the Docker images
-docker build -t "${BASE_REPO_URL}-frontend:${FRONTEND_VERSION}" "${BASE_REPO_DIR}/frontend"
+docker build --target prod -t "${BASE_REPO_URL}-frontend:${FRONTEND_VERSION}" "${BASE_REPO_DIR}/frontend"
 docker build -t "${BASE_REPO_URL}-backend:${BACKEND_VERSION}" "${BASE_REPO_DIR}/backend"
 
 # Push the Docker images to Artifactory

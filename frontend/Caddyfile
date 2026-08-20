@@ -1,0 +1,14 @@
+:80 {
+    # Keep proxy upload limit >= backend IMPORT_MAX_UPLOAD_MB so backend
+    # remains authoritative for JSON 413 responses.
+    request_body {
+        max_size 50MB
+    }
+
+    # SPA fallback for client-side routes.
+    handle {
+        root * /usr/share/caddy
+        try_files {path} /index.html
+        file_server
+    }
+}
