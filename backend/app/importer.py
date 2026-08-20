@@ -24,7 +24,16 @@ from .schemas import (
     collect_validation_errors,
     generate_remediation_prompt,
 )
-from .snapshot import _flatten_editors, _flatten_languages, _flatten_models
+from .snapshot import (
+    _flatten_editors,
+    _flatten_languages,
+    _flatten_models,
+    _report_day_to_raw_json,
+    _report_flatten_editors,
+    _report_flatten_features,
+    _report_flatten_languages,
+    _report_flatten_models,
+)
 
 SUPPORTED_IMPORT_SUFFIXES = {".json", ".jsonl", ".ndjson", ".csv"}
 MAX_WARNINGS = 25
@@ -52,12 +61,20 @@ class ExportDay:
     model_rows: dict[tuple[str, str, int], dict[str, Any]] = field(default_factory=dict)
 
 
-def import_usage_file(filename: str, content: bytes) -> dict[str, Any]:
+def import_usage_file(
+    filename: str,
+    content: bytes,
+    source_hint: str | None = None,
+) -> dict[str, Any]:
     """Import a supported local Copilot usage export file.
 
     Args:
         filename: Original uploaded filename; suffix determines line-oriented parsing.
         content: Uploaded file bytes already bounded by the API layer.
+        source_hint: Optional caller-specified source type override for per-user
+            NDJSON files (e.g. ``copilot_usage_insight_ndjson``). Used when the
+            file schema is identical to another type but the user knows which
+            report it came from.
 
     Returns:
         Import summary suitable for the API response.
@@ -84,6 +101,10 @@ def import_usage_file(filename: str, content: bytes) -> dict[str, Any]:
         rows_read = len(records) + skipped
         if _is_api_day(records[0]):
             summary = _import_api_days(records, rows_read, skipped, warnings, filename)
+        elif _is_enterprise_report_row(records[0]):
+            summary = _import_enterprise_report_rows(
+                records, rows_read, skipped, warnings, filename=filename,
+            )
         elif _is_export_row(records[0]):
             summary = _import_export_rows(
                 records, rows_read, skipped, warnings, source_suffix=suffix, filename=filename,
@@ -105,6 +126,17 @@ def import_usage_file(filename: str, content: bytes) -> dict[str, Any]:
         db.set_meta("last_json_load_source", data_load_source)
 
     source_type_key = summary["source_type"]
+    # Allow caller to override the source_type for timestamp tracking when the
+    # file content is ambiguous (both Copilot Usage Insight and Code Generation
+    # Insight are per-user NDJSON with the same schema).
+    _ALLOWED_SOURCE_HINTS = frozenset({
+        "copilot_usage_insight_ndjson",
+        "github_export_ndjson",
+        "github_export_json",
+    })
+    if source_hint and source_hint in _ALLOWED_SOURCE_HINTS:
+        source_type_key = source_hint
+        summary["source_type"] = source_hint
     db.set_meta(f"last_{source_type_key}_load_at", imported_at)
     return summary
 
@@ -670,6 +702,84 @@ def _is_api_day(record: dict[str, Any]) -> bool:
 def _is_export_row(record: dict[str, Any]) -> bool:
     return isinstance(record.get("day"), str) and (
         "user_login" in record or "user_id" in record
+    )
+
+
+def _is_enterprise_report_row(record: dict[str, Any]) -> bool:
+    # Aggregated org/enterprise Copilot Usage Insight in two shapes:
+    # 1) 28-day wrapper: day_totals array at top level
+    # 2) 1-day aggregated: day + daily_active_users, no user_login/user_id
+    if isinstance(record.get("day_totals"), list):
+        return True
+    return (
+        isinstance(record.get("day"), str)
+        and "daily_active_users" in record
+        and "user_login" not in record
+        and "user_id" not in record
+    )
+
+
+def _import_enterprise_report_rows(
+    records: list[dict[str, Any]],
+    rows_read: int,
+    skipped: int,
+    warnings: list[str],
+    filename: str = "",
+) -> dict[str, Any]:
+    by_day: dict[str, dict[str, Any]] = {}
+    imported_rows = 0
+    for idx, record in enumerate(records, start=1):
+        if isinstance(record.get("day_totals"), list):
+            # 28-day wrapped format: unwrap day_totals
+            for day_record in record["day_totals"]:
+                day_key = str(day_record.get("day") or "")[:10]
+                if not day_key:
+                    skipped += 1
+                    _add_warning(warnings, f"record {idx}: day_totals entry missing day field")
+                    continue
+                by_day[day_key] = day_record
+                imported_rows += 1
+        elif (
+            isinstance(record.get("day"), str)
+            and "daily_active_users" in record
+            and "user_login" not in record
+        ):
+            # 1-day aggregated format: record IS the day record
+            day_key = str(record["day"])[:10]
+            if not day_key:
+                skipped += 1
+                _add_warning(warnings, f"record {idx}: missing day field")
+                continue
+            by_day[day_key] = record
+            imported_rows += 1
+        else:
+            skipped += 1
+            _add_warning(warnings, f"record {idx}: skipped (unrecognized aggregated record)")
+            continue
+
+    if not by_day:
+        raise ImportValidationError(
+            "Copilot Usage Insight file contained no valid aggregated day records"
+        )
+
+    dates = sorted(by_day)
+    overwritten = _existing_org_scopes(dates)
+    for date, day in by_day.items():
+        raw = _report_day_to_raw_json(day)
+        db.upsert_org_day(
+            date,
+            day.get("daily_active_users"),
+            None,
+            raw,
+        )
+        db.replace_language_rows(date, _report_flatten_languages(day))
+        db.replace_editor_rows(date, _report_flatten_editors(day))
+        db.replace_model_rows(date, "org", "", _report_flatten_models(day))
+        db.replace_feature_rows(date, _report_flatten_features(day))
+
+    return _summary(
+        "copilot_usage_insight_ndjson", rows_read, imported_rows, skipped, warnings, dates,
+        overwritten, filename=filename,
     )
 
 

@@ -45,6 +45,7 @@ export interface Kpis {
   last_json_load_source: string | null;
   last_api_json_load_at: string | null;
   last_github_export_ndjson_load_at: string | null;
+  last_copilot_usage_insight_ndjson_load_at: string | null;
   last_csv_usage_report_load_at: string | null;
   last_csv_ai_usage_report_load_at: string | null;
   last_db_export_load_at: string | null;
@@ -611,9 +612,10 @@ export const api = {
     }
     return r.json();
   },
-  importFile: async (file: File, token?: string): Promise<ImportResult> => {
+  importFile: async (file: File, token?: string, sourceHint?: string): Promise<ImportResult> => {
     const body = new FormData();
     body.set("file", file);
+    if (sourceHint) body.set("source_hint", sourceHint);
     const headers: Record<string, string> = {};
     if (token) headers["X-Admin-Token"] = token;
     const r = await fetch(apiPath("/api/data/import-file"), { method: "POST", body, headers });

@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "ssr-jira-mcp": {
-      "command": "ssr-jira-mcp",
+      "command": "/Users/mbaj/.local/bin/ssr-jira-mcp",
       "env": {
         "JIRA_USER": "${JIRA_USER}",
         "JIRA_API_TOKEN": "${JIRA_API_TOKEN}"

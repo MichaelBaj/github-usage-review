@@ -12,7 +12,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -366,6 +366,7 @@ def health() -> dict[str, Any]:
         "last_json_load_source": db.get_meta("last_json_load_source"),
         "last_api_json_load_at": db.get_meta("last_api_json_load_at"),
         "last_github_export_ndjson_load_at": db.get_meta("last_github_export_ndjson_load_at"),
+        "last_copilot_usage_insight_ndjson_load_at": db.get_meta("last_copilot_usage_insight_ndjson_load_at"),
         "last_csv_usage_report_load_at": db.get_meta("last_csv_usage_report_load_at"),
         "last_csv_ai_usage_report_load_at": db.get_meta("last_csv_ai_usage_report_load_at"),
         "last_db_export_load_at": db.get_meta("last_db_export_load_at"),
@@ -658,6 +659,7 @@ async def trigger_snapshot() -> dict[str, Any]:
 async def import_file(
     request: Request,
     file: UploadFile = IMPORT_UPLOAD,
+    source_hint: str | None = Form(None),
     x_admin_token: str | None = Header(None),
 ) -> dict[str, Any]:
     """Import a local JSON/JSONL/NDJSON Copilot usage export upload."""
@@ -678,7 +680,7 @@ async def import_file(
             )
         chunks.append(chunk)
     try:
-        return import_usage_file(filename, b"".join(chunks))
+        return import_usage_file(filename, b"".join(chunks), source_hint=source_hint)
     except ImportValidationError as exc:
         raise HTTPException(
             status_code=400,

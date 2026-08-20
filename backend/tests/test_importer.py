@@ -179,7 +179,260 @@ def test_import_usage_file_malformed_ndjson_lines_warn_and_continue() -> None:
     assert len(result["warnings"]) == 2
 
 
-def test_import_usage_file_sparse_export_leaves_absent_sources_empty() -> None:
+def _enterprise_report_row(day: str = "2026-06-03", active: int = 20) -> dict:
+    """Build a Copilot Usage Insight enterprise/org-level NDJSON record."""
+    return {
+        "enterprise_id": "7342",
+        "report_start_day": "2026-05-20",
+        "report_end_day": "2026-06-16",
+        "day_partition": day,
+        "entity_id_partition": 7342,
+        "day_totals": [
+            {
+                "day": day,
+                "enterprise_id": "7342",
+                "daily_active_users": active,
+                "code_generation_activity_count": 500,
+                "code_acceptance_activity_count": 200,
+                "loc_suggested_to_add_sum": 1000,
+                "loc_added_sum": 400,
+                "totals_by_ide": [
+                    {
+                        "ide": "vscode",
+                        "code_generation_activity_count": 500,
+                        "code_acceptance_activity_count": 200,
+                        "loc_suggested_to_add_sum": 1000,
+                        "loc_added_sum": 400,
+                    }
+                ],
+                "totals_by_feature": [
+                    {
+                        "feature": "code_completion",
+                        "code_generation_activity_count": 500,
+                        "code_acceptance_activity_count": 200,
+                        "loc_suggested_to_add_sum": 1000,
+                        "loc_added_sum": 400,
+                        "user_initiated_interaction_count": 0,
+                    }
+                ],
+                "totals_by_language_feature": [
+                    {
+                        "language": "python",
+                        "feature": "code_completion",
+                        "code_generation_activity_count": 500,
+                        "code_acceptance_activity_count": 200,
+                        "loc_suggested_to_add_sum": 1000,
+                        "loc_added_sum": 400,
+                    }
+                ],
+                "totals_by_model_feature": [
+                    {
+                        "model": "gpt-4o",
+                        "feature": "code_completion",
+                        "code_generation_activity_count": 500,
+                        "code_acceptance_activity_count": 200,
+                        "loc_suggested_to_add_sum": 1000,
+                        "loc_added_sum": 400,
+                    }
+                ],
+                "totals_by_language_model": [],
+            }
+        ],
+    }
+
+
+def test_import_enterprise_report_ndjson_correct_source_type() -> None:
+    """Copilot Usage Insight (enterprise report) sets copilot_usage_insight_ndjson source type."""
+    # Arrange
+    db.init_db()
+    content = json.dumps(_enterprise_report_row()).encode()
+
+    # Act
+    result = import_usage_file("copilot-usage-insight.ndjson", content)
+
+    # Assert
+    assert result["source_type"] == "copilot_usage_insight_ndjson"
+    assert result["rows_imported"] == 1
+    assert result["date_range"] == {"start": "2026-06-03", "end": "2026-06-03"}
+
+
+def test_import_enterprise_report_ndjson_stores_org_day_metrics() -> None:
+    """Copilot Usage Insight org-day data is stored and queryable."""
+    # Arrange
+    db.init_db()
+    content = json.dumps(_enterprise_report_row(active=20)).encode()
+
+    # Act
+    import_usage_file("copilot-usage-insight.ndjson", content)
+
+    # Assert
+    trend = analytics.trends(start="2026-06-03", end="2026-06-03")
+    assert len(trend) == 1
+    assert trend[0]["suggestions"] == 500
+    assert trend[0]["acceptances"] == 200
+
+
+def test_import_enterprise_report_ndjson_sets_meta_timestamp() -> None:
+    """Importing a Copilot Usage Insight file updates last_copilot_usage_insight_ndjson_load_at."""
+    # Arrange
+    db.init_db()
+    content = json.dumps(_enterprise_report_row()).encode()
+
+    # Act
+    import_usage_file("copilot-usage-insight.ndjson", content)
+
+    # Assert
+    assert db.get_meta("last_copilot_usage_insight_ndjson_load_at") is not None
+
+
+def test_import_enterprise_report_does_not_set_code_gen_timestamp() -> None:
+    """Importing Copilot Usage Insight does NOT overwrite the Code Generation Insight timestamp."""
+    # Arrange
+    db.init_db()
+    db.set_meta("last_github_export_ndjson_load_at", "2026-01-01T00:00:00+00:00")
+    content = json.dumps(_enterprise_report_row()).encode()
+
+    # Act
+    import_usage_file("copilot-usage-insight.ndjson", content)
+
+    # Assert
+    assert db.get_meta("last_github_export_ndjson_load_at") == "2026-01-01T00:00:00+00:00"
+
+
+def test_import_enterprise_report_multi_day_ndjson() -> None:
+    """Multiple NDJSON lines (different days) are all ingested."""
+    # Arrange
+    db.init_db()
+    lines = "\n".join(
+        json.dumps(_enterprise_report_row(day=f"2026-06-0{d}")) for d in range(1, 4)
+    )
+
+    # Act
+    result = import_usage_file("multi.ndjson", lines.encode())
+
+    # Assert
+    assert result["source_type"] == "copilot_usage_insight_ndjson"
+    assert result["rows_imported"] == 3
+    assert result["date_range"] == {"start": "2026-06-01", "end": "2026-06-03"}
+
+
+def test_import_enterprise_report_skips_entries_without_day() -> None:
+    """day_totals entries missing a day field are skipped with a warning."""
+    # Arrange
+    db.init_db()
+    record = _enterprise_report_row()
+    record["day_totals"][0].pop("day")
+    content = json.dumps(record).encode()
+
+    # Act / Assert
+    with pytest.raises(ImportValidationError, match="no valid aggregated day records"):
+        import_usage_file("bad.ndjson", content)
+
+
+def _aggregated_1day_row(day: str = "2026-06-03", active: int = 20) -> dict:
+    """Build a 1-day aggregated org/enterprise NDJSON record (no day_totals wrapper)."""
+    return {
+        "day": day,
+        "enterprise_id": "7342",
+        "daily_active_users": active,
+        "monthly_active_users": 150,
+        "code_generation_activity_count": 500,
+        "code_acceptance_activity_count": 200,
+        "loc_suggested_to_add_sum": 1000,
+        "loc_added_sum": 400,
+        "user_initiated_interaction_count": 300,
+        "totals_by_ide": [
+            {
+                "ide": "vscode",
+                "code_generation_activity_count": 500,
+                "code_acceptance_activity_count": 200,
+                "loc_suggested_to_add_sum": 1000,
+                "loc_added_sum": 400,
+            }
+        ],
+        "totals_by_feature": [
+            {
+                "feature": "code_completion",
+                "code_generation_activity_count": 500,
+                "code_acceptance_activity_count": 200,
+                "loc_suggested_to_add_sum": 1000,
+                "loc_added_sum": 400,
+                "user_initiated_interaction_count": 0,
+            }
+        ],
+        "totals_by_language_feature": [
+            {
+                "language": "python",
+                "feature": "code_completion",
+                "code_generation_activity_count": 500,
+                "code_acceptance_activity_count": 200,
+                "loc_suggested_to_add_sum": 1000,
+                "loc_added_sum": 400,
+            }
+        ],
+        "totals_by_model_feature": [
+            {
+                "model": "gpt-4o",
+                "feature": "code_completion",
+                "code_generation_activity_count": 500,
+                "code_acceptance_activity_count": 200,
+                "loc_suggested_to_add_sum": 1000,
+                "loc_added_sum": 400,
+            }
+        ],
+        "totals_by_ai_adoption_phase": [],
+        "pull_requests": {"total_created": 10, "total_merged": 8},
+    }
+
+
+def test_import_aggregated_1day_report_correct_source_type() -> None:
+    """Aggregated 1-day report (no day_totals wrapper) imports as copilot_usage_insight_ndjson."""
+    # Arrange
+    db.init_db()
+    content = json.dumps(_aggregated_1day_row()).encode()
+
+    # Act
+    result = import_usage_file("org-1-day.ndjson", content)
+
+    # Assert
+    assert result["source_type"] == "copilot_usage_insight_ndjson"
+    assert result["rows_imported"] == 1
+    assert result["date_range"] == {"start": "2026-06-03", "end": "2026-06-03"}
+
+
+def test_import_aggregated_1day_multi_day_ndjson() -> None:
+    """Multiple 1-day aggregated NDJSON lines are all ingested."""
+    # Arrange
+    db.init_db()
+    lines = "\n".join(
+        json.dumps(_aggregated_1day_row(day=f"2026-06-0{d}")) for d in range(1, 4)
+    )
+
+    # Act
+    result = import_usage_file("multi.ndjson", lines.encode())
+
+    # Assert
+    assert result["rows_imported"] == 3
+    assert result["date_range"] == {"start": "2026-06-01", "end": "2026-06-03"}
+
+
+def test_import_aggregated_1day_stores_org_day_metrics() -> None:
+    """Aggregated 1-day report stores org day metrics correctly."""
+    # Arrange
+    db.init_db()
+    content = json.dumps(_aggregated_1day_row(active=25)).encode()
+
+    # Act
+    import_usage_file("org-1-day.ndjson", content)
+
+    # Assert
+    trend = analytics.trends(start="2026-06-03", end="2026-06-03")
+    assert len(trend) == 1
+    assert trend[0]["active_users"] == 25
+    assert trend[0]["suggestions"] == 500
+
+
+
     """Sparse imports do not fabricate team, seat, billing, or PR data."""
     # Arrange
     db.init_db()

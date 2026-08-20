@@ -13,7 +13,7 @@ import { QualityTab } from "./components/QualityTab";
 import { ImportsExportsTab } from "./components/ImportsExportsTab";
 import { defaultWindowThisMonth, type WindowState } from "./components/DateRangeSelector";
 // Calendar-date versioning (YYYY-MM-DD.build)
-const VERSION = "2026-08-19.1";
+const VERSION = "2026-08-20.2";
 
 
 type Tab = "summary" | "teams" | "users" | "quality" | "imports-exports";
@@ -57,6 +57,7 @@ export function App(): JSX.Element {
     jsonSource: string | null;
     apiJsonAt: string | null;
     exportNdjsonAt: string | null;
+    copilotUsageInsightAt: string | null;
     csvUsageReportAt: string | null;
     csvAiUsageReportAt: string | null;
     dbExportAt: string | null;
@@ -70,6 +71,7 @@ export function App(): JSX.Element {
     jsonSource: null,
     apiJsonAt: null,
     exportNdjsonAt: null,
+    copilotUsageInsightAt: null,
     csvUsageReportAt: null,
     csvAiUsageReportAt: null,
     dbExportAt: null,
@@ -112,6 +114,7 @@ export function App(): JSX.Element {
         jsonSource: k.last_json_load_source ?? null,
         apiJsonAt: k.last_api_json_load_at ?? null,
         exportNdjsonAt: k.last_github_export_ndjson_load_at ?? null,
+        copilotUsageInsightAt: k.last_copilot_usage_insight_ndjson_load_at ?? null,
         csvUsageReportAt: k.last_csv_usage_report_load_at ?? null,
         csvAiUsageReportAt: k.last_csv_ai_usage_report_load_at ?? null,
         dbExportAt: k.last_db_export_load_at ?? null,
@@ -148,7 +151,7 @@ export function App(): JSX.Element {
     }
   }
 
-  async function importUsage(file: File | undefined): Promise<void> {
+  async function importUsage(file: File | undefined, sourceHint?: string): Promise<void> {
     if (!file) return;
     if (isDbExportFile(file)) {
       importDbExport(file);
@@ -159,7 +162,7 @@ export function App(): JSX.Element {
     setImportResult(null);
     setDbImportResult(null);
     try {
-      const result = await api.importFile(file, adminToken);
+      const result = await api.importFile(file, adminToken, sourceHint);
       setImportResult(result);
       setDataVersion((value) => value + 1);
     } catch (e) {
@@ -214,7 +217,7 @@ export function App(): JSX.Element {
 
   const dataLoadEntries: Array<{ name: string; dataType: string; lastLoaded: string; source: string }> = [
     { name: "GitHub API Snapshot", dataType: "API", lastLoaded: lastLoad.apiAt ?? "never", source: "api" },
-    { name: "Copilot Usage Insight", dataType: "NDJSON", lastLoaded: lastLoad.apiJsonAt ?? "never", source: "api_json" },
+    { name: "Copilot Usage Insight", dataType: "NDJSON", lastLoaded: lastLoad.copilotUsageInsightAt ?? "never", source: "copilot_usage_insight_ndjson" },
     { name: "Code Generation Insight", dataType: "NDJSON", lastLoaded: lastLoad.exportNdjsonAt ?? "never", source: "github_export_ndjson" },
     { name: "Metered Usage Billing", dataType: "CSV", lastLoaded: lastLoad.csvUsageReportAt ?? "never", source: "csv_usage_report" },
     { name: "AI Usage Billing", dataType: "CSV", lastLoaded: lastLoad.csvAiUsageReportAt ?? "never", source: "csv_ai_usage_report" },

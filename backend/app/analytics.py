@@ -252,6 +252,7 @@ def kpis(
         "last_json_load_source": db.get_meta("last_json_load_source"),
         "last_api_json_load_at": db.get_meta("last_api_json_load_at"),
         "last_github_export_ndjson_load_at": db.get_meta("last_github_export_ndjson_load_at"),
+        "last_copilot_usage_insight_ndjson_load_at": db.get_meta("last_copilot_usage_insight_ndjson_load_at"),
         "last_csv_usage_report_load_at": db.get_meta("last_csv_usage_report_load_at"),
         "last_csv_ai_usage_report_load_at": db.get_meta("last_csv_ai_usage_report_load_at"),
         "last_db_export_load_at": db.get_meta("last_db_export_load_at"),

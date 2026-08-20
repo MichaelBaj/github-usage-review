@@ -26,7 +26,7 @@ interface ImportsExportsTabProps {
   dbImportResult: DbImportResult | null;
   onRefresh: () => Promise<void>;
   onExport: () => Promise<void>;
-  onImport: (file: File | undefined) => Promise<void>;
+  onImport: (file: File | undefined, sourceHint?: string) => Promise<void>;
   onUsageReportImported: (result: ImportResult) => void;
 }
 
@@ -232,6 +232,7 @@ export function ImportsExportsTab({
               <th>Data Type</th>
               <th>Last Loaded</th>
               <th>Source</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -241,6 +242,22 @@ export function ImportsExportsTab({
                 <td>{entry.dataType}</td>
                 <td>{entry.lastLoaded}</td>
                 <td>{entry.source}</td>
+                <td>
+                  {entry.dataType === "NDJSON" ? (
+                    <label className={importing ? "upload-button upload-disabled" : "upload-button"}>
+                      Import
+                      <input
+                        type="file"
+                        accept=".json,.jsonl,.ndjson"
+                        disabled={importing}
+                        onChange={(event) => {
+                          void onImport(event.target.files?.[0], entry.source);
+                          event.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+                  ) : null}
+                </td>
               </tr>
             ))}
           </tbody>

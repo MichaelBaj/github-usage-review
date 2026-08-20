@@ -2,7 +2,7 @@
   "servers": {
     "fetch": {
       "type": "stdio",
-      "command": "uvx",
+      "command": "/opt/homebrew/bin/uvx",
       "args": [
         "mcp-server-fetch"
       ],
@@ -10,7 +10,7 @@
     },
     "github": {
       "type": "stdio",
-      "command": "gh",
+      "command": "/opt/homebrew/bin/gh",
       "args": [
         "copilot",
         "mcp-server"
