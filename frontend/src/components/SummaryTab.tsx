@@ -9,7 +9,6 @@ import {
   type FeatureBreakdown,
   type Kpis,
   type AiCreditsSummary,
-  type ModelBreakdown,
   type StaleSeat,
   type TeamRow,
 } from "../api";
@@ -34,7 +33,6 @@ interface State {
   features: FeatureBreakdown | null;
   cost: CostWindow | null;
   premium: AiCreditsSummary | null;
-  modelCreditsTotal: number | null;
   creditProjection: AiCreditsProjection | null;
 }
 
@@ -48,18 +46,8 @@ const initial: State = {
   features: null,
   cost: null,
   premium: null,
-  modelCreditsTotal: null,
   creditProjection: null,
 };
-
-function modelCreditsGrandTotal(data: ModelBreakdown): number {
-  const byModel = new Map<string, number>();
-  for (const row of [...data.code, ...data.chat]) {
-    const modelKey = (row.model || "unknown").toLowerCase();
-    byModel.set(modelKey, Math.max(byModel.get(modelKey) ?? 0, row.ai_credits || 0));
-  }
-  return Array.from(byModel.values()).reduce((sum, value) => sum + value, 0);
-}
 
 function TopUsersPerModelTable({ models }: { models: AiCreditTopUsersPerModel[] }): JSX.Element {
   if (models.length === 0) {
@@ -166,7 +154,7 @@ export function SummaryTab({ win, onWinChange }: { win: WindowState; onWinChange
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
       const params = toWindowParams(win);
-      const [kpis, teams, stale, breakdowns, features, cost, premium, models, creditProjection] = await Promise.all([
+      const [kpis, teams, stale, breakdowns, features, cost, premium, creditProjection] = await Promise.all([
         api.kpis(params),
         api.teams(params),
         api.staleSeats(),
@@ -174,7 +162,6 @@ export function SummaryTab({ win, onWinChange }: { win: WindowState; onWinChange
         api.features(params).catch(() => null),
         api.cost(params),
         api.aiCredits(params),
-        api.models(params),
         api.aiCreditsProjection().catch(() => null),
       ]);
       setState({
@@ -187,7 +174,6 @@ export function SummaryTab({ win, onWinChange }: { win: WindowState; onWinChange
         features,
         cost,
         premium,
-        modelCreditsTotal: modelCreditsGrandTotal(models),
         creditProjection,
       });
     } catch (e) {
@@ -250,11 +236,9 @@ export function SummaryTab({ win, onWinChange }: { win: WindowState; onWinChange
                   value={
                     state.premium?.headline_ai_credits != null
                       ? fmtNum(state.premium.headline_ai_credits)
-                      : state.modelCreditsTotal !== null
-                        ? fmtNum(state.modelCreditsTotal)
-                        : state.premium
-                          ? fmtNum(state.premium.total_ai_credits)
-                          : "—"
+                      : state.premium
+                        ? fmtNum(state.premium.total_ai_credits)
+                        : "—"
                   }
                   sub={
                     state.premium && state.premium.available

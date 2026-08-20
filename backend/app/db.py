@@ -176,6 +176,9 @@ CREATE TABLE IF NOT EXISTS team_members (
 );
 
 CREATE INDEX IF NOT EXISTS idx_team_members_login ON team_members(login);
+
+CREATE INDEX IF NOT EXISTS idx_seats_last_activity
+    ON seats(last_activity_at);
 """
 
 # ``billing_usage`` is created and migrated separately (see ``_migrate_billing_usage``)
@@ -222,6 +225,7 @@ def _billing_table_ddl(table: str) -> str:
 _BILLING_INDEX_DDL = """
 CREATE INDEX IF NOT EXISTS idx_billing_login_date ON billing_usage(login, date);
 CREATE INDEX IF NOT EXISTS idx_billing_sku_date ON billing_usage(sku, date);
+CREATE INDEX IF NOT EXISTS idx_billing_date ON billing_usage(date);
 """
 
 # Columns preserved when rebuilding an old (pre-model) billing_usage table.
@@ -248,6 +252,12 @@ def connect() -> Iterator[sqlite3.Connection]:
     _ensure_parent(settings.db_path)
     conn = sqlite3.connect(settings.db_path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA cache_size=-8000")
+    conn.execute("PRAGMA mmap_size=67108864")
+    conn.execute("PRAGMA busy_timeout=5000")
     try:
         yield conn
         conn.commit()

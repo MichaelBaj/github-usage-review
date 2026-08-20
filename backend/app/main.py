@@ -18,6 +18,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from . import analytics, db
+from . import cache as _cache
 from .config import settings
 from .config import VERSION
 from .github_client import GitHubClient, SnapshotPreflightError
@@ -392,7 +393,13 @@ def get_kpis(
     end: str | None = None,
 ) -> dict[str, Any]:
     """Return headline dashboard KPIs for a window (default last 30 days)."""
-    return analytics.kpis(days=days, start=start, end=end)
+    key = _cache.make_key("kpis", days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.kpis(days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/trends")
@@ -402,7 +409,13 @@ def get_trends(
     end: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return daily org metrics for the window."""
-    return analytics.trends(days=days, start=start, end=end)
+    key = _cache.make_key("trends", days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.trends(days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/teams")
@@ -412,7 +425,13 @@ def get_teams(
     end: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return per-team aggregated metrics for the window."""
-    return analytics.teams_leaderboard(days=days, start=start, end=end)
+    key = _cache.make_key("teams", days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.teams_leaderboard(days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/teams/list")
@@ -429,13 +448,25 @@ def get_team_detail(
     end: str | None = None,
 ) -> dict[str, Any]:
     """Return full detail for one team (metrics + PR rollup + cost)."""
-    return analytics.team_detail(team_slug, days=days, start=start, end=end)
+    key = _cache.make_key("team_detail", slug=team_slug, days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.team_detail(team_slug, days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/seats/stale")
 def get_stale_seats() -> list[dict[str, Any]]:
     """Return seats inactive longer than the configured threshold."""
-    return analytics.stale_seats()
+    key = _cache.make_key("stale_seats")
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.stale_seats()
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/users")
@@ -445,7 +476,13 @@ def get_users(
     end: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return seat-holders with PR activity rollup for the window."""
-    return analytics.users_list(days=days, start=start, end=end)
+    key = _cache.make_key("users", days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.users_list(days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/users/{login}")
@@ -456,7 +493,13 @@ def get_user_detail(
     end: str | None = None,
 ) -> dict[str, Any]:
     """Return detail view for one user (seat + PR activity)."""
-    return analytics.user_detail(login, days=days, start=start, end=end)
+    key = _cache.make_key("user_detail", login=login, days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.user_detail(login, days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/breakdowns")
@@ -466,7 +509,13 @@ def get_breakdowns(
     end: str | None = None,
 ) -> dict[str, Any]:
     """Return language + editor breakdowns for the window."""
-    return analytics.breakdowns(days=days, start=start, end=end)
+    key = _cache.make_key("breakdowns", days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.breakdowns(days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/models")
@@ -477,7 +526,13 @@ def get_models(
     team: str | None = None,
 ) -> dict[str, Any]:
     """Return per-model usage breakdown for the window."""
-    return analytics.model_breakdown(days=days, start=start, end=end, team=team)
+    key = _cache.make_key("models", days=days, start=start, end=end, team=team)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.model_breakdown(days=days, start=start, end=end, team=team)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/chat-vs-inline")
@@ -488,7 +543,13 @@ def get_chat_vs_inline(
     team: str | None = None,
 ) -> dict[str, Any]:
     """Return code-completion vs chat usage split."""
-    return analytics.chat_vs_inline(days=days, start=start, end=end, team=team)
+    key = _cache.make_key("chat_vs_inline", days=days, start=start, end=end, team=team)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.chat_vs_inline(days=days, start=start, end=end, team=team)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/features")
@@ -498,7 +559,13 @@ def get_features(
     end: str | None = None,
 ) -> dict[str, Any]:
     """Return per-feature usage breakdown (agent mode, completions, CLI, etc.)."""
-    return analytics.feature_breakdown(days=days, start=start, end=end)
+    key = _cache.make_key("features", days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.feature_breakdown(days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/cost")
@@ -508,13 +575,25 @@ def get_cost(
     end: str | None = None,
 ) -> dict[str, Any]:
     """Return prorated seat cost for the window."""
-    return analytics.cost_for_window(days=days, start=start, end=end)
+    key = _cache.make_key("cost", days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.cost_for_window(days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/cohorts")
 def get_cohorts() -> dict[str, Any]:
     """Return seat-onboarding ramp distribution."""
-    return analytics.cohort_ramp()
+    key = _cache.make_key("cohorts")
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.cohort_ramp()
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/distribution")
@@ -525,7 +604,13 @@ def get_distribution(
     team: str | None = None,
 ) -> dict[str, Any]:
     """Return power-user concentration metrics for the window."""
-    return analytics.power_user_concentration(days=days, start=start, end=end, team=team)
+    key = _cache.make_key("distribution", days=days, start=start, end=end, team=team)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.power_user_concentration(days=days, start=start, end=end, team=team)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/pr-correlation")
@@ -536,7 +621,13 @@ def get_pr_correlation(
     team: str | None = None,
 ) -> dict[str, Any]:
     """Return PR outcome metrics split by AI-seat ownership."""
-    return analytics.pr_correlation(days=days, start=start, end=end, team=team)
+    key = _cache.make_key("pr_correlation", days=days, start=start, end=end, team=team)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.pr_correlation(days=days, start=start, end=end, team=team)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/quality")
@@ -546,7 +637,13 @@ def get_quality(
     end: str | None = None,
 ) -> dict[str, Any]:
     """Return the rollup payload for the Quality tab."""
-    return analytics.quality_summary(days=days, start=start, end=end)
+    key = _cache.make_key("quality", days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.quality_summary(days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/ai-credits")
@@ -556,7 +653,13 @@ def get_ai_credits(
     end: str | None = None,
 ) -> dict[str, Any]:
     """Return org-level Copilot AI-credit usage from billing data."""
-    return analytics.ai_credits_summary(days=days, start=start, end=end)
+    key = _cache.make_key("ai_credits", days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.ai_credits_summary(days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/ai-credits/users/{login}")
@@ -567,7 +670,13 @@ def get_ai_credits_user(
     end: str | None = None,
 ) -> dict[str, Any]:
     """Return per-user Copilot AI-credit usage."""
-    return analytics.ai_credits_for_user(login, days=days, start=start, end=end)
+    key = _cache.make_key("ai_credits_user", login=login, days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.ai_credits_for_user(login, days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/ai-credits/teams/{team_slug}")
@@ -578,7 +687,13 @@ def get_ai_credits_team(
     end: str | None = None,
 ) -> dict[str, Any]:
     """Return per-team Copilot AI-credit usage."""
-    return analytics.ai_credits_for_team(team_slug, days=days, start=start, end=end)
+    key = _cache.make_key("ai_credits_team", slug=team_slug, days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.ai_credits_for_team(team_slug, days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/ai-credits/projection")
@@ -629,13 +744,25 @@ def get_roi(
     end: str | None = None,
 ) -> dict[str, Any]:
     """Return cost/savings ROI summary for the window."""
-    return analytics.roi(days=days, start=start, end=end)
+    key = _cache.make_key("roi", days=days, start=start, end=end)
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.roi(days=days, start=start, end=end)
+    _cache.put(key, result)
+    return result
 
 
 @app.get("/api/projections")
 def get_projections() -> dict[str, Any]:
     """Return projected active users and right-sized seat recommendation."""
-    return analytics.projections()
+    key = _cache.make_key("projections")
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+    result = analytics.projections()
+    _cache.put(key, result)
+    return result
 
 
 @app.post("/api/snapshot/run")
@@ -652,7 +779,9 @@ async def trigger_snapshot() -> dict[str, Any]:
         await assert_snapshot_permissions()
     except SnapshotPreflightError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    return await run_snapshot()
+    result = await run_snapshot()
+    _cache.bump()
+    return result
 
 
 @app.post("/api/data/import-file")
@@ -686,6 +815,8 @@ async def import_file(
             status_code=400,
             detail=str(exc),
         ) from exc
+    finally:
+        _cache.bump()
 
 
 @app.get("/api/data/export")
@@ -738,6 +869,7 @@ async def import_database(
         result = db.import_database(content, mode)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _cache.bump()
     imported_at = datetime.now(UTC).isoformat()
     db.set_meta("last_data_load_at", imported_at)
     db.set_meta("last_data_load_source", f"db-export ({mode})")
@@ -857,6 +989,7 @@ async def import_usage_report(report_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.HTTPStatusError as exc:
         _raise_github_http_error(exc, "import usage report")
+    _cache.bump()
     status = str(job.get("status") or "").lower()
     report_type = str(job.get("report_type") or "usage")
     start_date = str(job.get("start_date") or "")
@@ -1052,6 +1185,7 @@ async def _run_refresh_all_job(job_id: str) -> None:
         raise
     finally:
         job["finished_at"] = _now_iso()
+        _cache.bump()
         if not canceled and errors:
             job["status"] = "completed_with_errors"
             job["errors"] = errors

@@ -413,6 +413,130 @@ def _team_member_rollup(
     }
 
 
+def _batch_team_member_rollups(
+    members_by_team: dict[str, list[str]],
+    start_iso: str,
+    end_iso: str,
+) -> dict[str, dict[str, Any]]:
+    """Run 4 batched queries for ALL team members, then partition by team.
+
+    Returns ``{slug: summary_dict}`` with the same summary shape as
+    ``_team_member_rollup``.
+    """
+    now = datetime.now(UTC)
+    stale_cut = now - timedelta(days=settings.stale_seat_days)
+    start_dt = f"{start_iso}T00:00:00+00:00"
+    end_dt = f"{end_iso}T23:59:59+00:00"
+
+    all_members: set[str] = set()
+    for logins in members_by_team.values():
+        all_members.update(m for m in logins if m)
+    if not all_members:
+        return {}
+
+    lower_map = {m.lower(): m for m in all_members}
+    ordered_members = sorted(all_members)
+    ordered_lower = sorted(lower_map)
+    placeholders = ",".join("?" for _ in ordered_members)
+    lower_placeholders = ",".join("?" for _ in ordered_lower)
+
+    seat_by_login: dict[str, dict[str, Any]] = {}
+    pr_by_login: dict[str, dict[str, int]] = {}
+    premium_by_login: dict[str, float] = {}
+    cost_by_login: dict[str, float] = {}
+
+    with db.connect() as conn:
+        for row in conn.execute(
+            f"SELECT login, last_activity_at, last_activity_editor "
+            f"FROM seats WHERE login IN ({placeholders})",
+            ordered_members,
+        ).fetchall():
+            seat_by_login[row["login"]] = dict(row)
+        for row in conn.execute(
+            f"SELECT author, COUNT(*) AS prs, "
+            f"SUM(CASE WHEN merged_at IS NOT NULL THEN 1 ELSE 0 END) AS merged, "
+            f"SUM(additions) AS adds, SUM(deletions) AS dels "
+            f"FROM pull_requests "
+            f"WHERE author IN ({placeholders}) "
+            f"AND ((created_at BETWEEN ? AND ?) OR (merged_at BETWEEN ? AND ?)) "
+            f"GROUP BY author",
+            (*ordered_members, start_dt, end_dt, start_dt, end_dt),
+        ).fetchall():
+            pr_by_login[row["author"]] = {
+                "prs": row["prs"] or 0,
+                "merged_prs": row["merged"] or 0,
+                "additions": row["adds"] or 0,
+                "deletions": row["dels"] or 0,
+            }
+        dedup = _billing_dedup_sql(conn, start_iso, end_iso)
+        for row in conn.execute(
+            f"SELECT lower(login) AS login, SUM(quantity) AS qty FROM billing_usage "
+            f"WHERE date BETWEEN ? AND ? AND lower(product) LIKE '%copilot%' "
+            f"{_BILLING_MIN_DATE_SQL} "
+            f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            f"{dedup} "
+            f"AND lower(login) IN ({lower_placeholders}) GROUP BY lower(login)",
+            (start_iso, end_iso, *ordered_lower),
+        ).fetchall():
+            canonical = lower_map.get(row["login"] or "", row["login"])
+            premium_by_login[canonical] = float(row["qty"] or 0)
+        for row in conn.execute(
+            f"SELECT lower(login) AS login, SUM(net_amount_usd) AS net FROM billing_usage "
+            f"WHERE date BETWEEN ? AND ? AND lower(product) LIKE '%copilot%' "
+            f"{_BILLING_MIN_DATE_SQL} "
+            f"AND {_COPILOT_BILLABLE_SKU_SQL} "
+            f"{dedup} "
+            f"AND lower(login) IN ({lower_placeholders}) GROUP BY lower(login)",
+            (start_iso, end_iso, *ordered_lower),
+        ).fetchall():
+            canonical = lower_map.get(row["login"] or "", row["login"])
+            cost_by_login[canonical] = round(float(row["net"] or 0), 2)
+
+    # Partition per-user data into per-team summaries.
+    result: dict[str, dict[str, Any]] = {}
+    for slug, logins in members_by_team.items():
+        member_set = {m for m in logins if m}
+        active_members = stale_members = never_used_members = 0
+        total_premium = total_cost = 0.0
+        total_prs = total_merged = total_net_lines = 0
+        members_with_seats = 0
+        for login in member_set:
+            seat = seat_by_login.get(login)
+            if seat is not None:
+                members_with_seats += 1
+            last_activity = _parse_iso(seat["last_activity_at"]) if seat else None
+            if seat is None:
+                pass
+            elif last_activity is None:
+                never_used_members += 1
+            elif last_activity >= stale_cut:
+                active_members += 1
+            else:
+                stale_members += 1
+            pr = pr_by_login.get(login, {"prs": 0, "merged_prs": 0, "additions": 0, "deletions": 0})
+            total_prs += pr["prs"]
+            total_merged += pr["merged_prs"]
+            total_net_lines += pr["additions"] - pr["deletions"]
+            total_premium += premium_by_login.get(login, 0.0)
+            total_cost += cost_by_login.get(login, 0.0)
+        members_total = len(member_set)
+        adoption_rate = (active_members / members_with_seats) if members_with_seats else 0.0
+        result[slug] = {
+            "members_total": members_total,
+            "members_with_seats": members_with_seats,
+            "active_members": active_members,
+            "stale_members": stale_members,
+            "never_used_members": never_used_members,
+            "adoption_rate": round(adoption_rate, 4),
+            "ai_credits": round(total_premium, 2),
+            "window_cost_usd": round(total_cost, 2),
+            "prs": total_prs,
+            "merged_prs": total_merged,
+            "net_lines": total_net_lines,
+        }
+    return result
+
+
 def teams_leaderboard(
     days: int = 30,
     start: str | None = None,
@@ -462,10 +586,18 @@ def teams_leaderboard(
         metric_day_counts[slug] = metric_day_counts.get(slug, 0) + 1
 
     slugs = sorted(set(members_by_team) | set(metrics_by_team))
+
+    # Batch all member lookups into 4 queries total (not 4 × team count).
+    all_rollups = _batch_team_member_rollups(members_by_team, start_iso, end_iso)
+
     out: list[dict[str, Any]] = []
     for slug in slugs:
-        rollup = _team_member_rollup(members_by_team.get(slug, []), start_iso, end_iso)
-        summary = rollup["summary"]
+        summary = all_rollups.get(slug, {
+            "members_total": 0, "members_with_seats": 0,
+            "active_members": 0, "stale_members": 0, "never_used_members": 0,
+            "adoption_rate": 0.0, "ai_credits": 0.0, "window_cost_usd": 0.0,
+            "prs": 0, "merged_prs": 0, "net_lines": 0,
+        })
         metric = metrics_by_team.get(slug)
         if metric:
             days_n = metric_day_counts.get(slug, 1) or 1
