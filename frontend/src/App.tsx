@@ -13,7 +13,7 @@ import { QualityTab } from "./components/QualityTab";
 import { ImportsExportsTab } from "./components/ImportsExportsTab";
 import { defaultWindowThisMonth, type WindowState } from "./components/DateRangeSelector";
 // Calendar-date versioning (YYYY-MM-DD.build)
-const VERSION = "2026-08-20.3";
+const VERSION = "2026-08-24.2";
 
 
 type Tab = "summary" | "teams" | "users" | "quality" | "imports-exports";
@@ -208,13 +208,6 @@ export function App(): JSX.Element {
     }
   }
 
-  function handleUsageReportImported(result: ImportResult): void {
-    setError(null);
-    setDbImportResult(null);
-    setImportResult(result);
-    setDataVersion((value) => value + 1);
-  }
-
   const dataLoadEntries: Array<{ name: string; dataType: string; lastLoaded: string; source: string }> = [
     { name: "GitHub API Snapshot", dataType: "API", lastLoaded: lastLoad.apiAt ?? "never", source: "api" },
     { name: "Copilot Usage Insight", dataType: "NDJSON", lastLoaded: lastLoad.copilotUsageInsightAt ?? "never", source: "copilot_usage_insight_ndjson" },
@@ -273,7 +266,6 @@ export function App(): JSX.Element {
           onRefresh={refresh}
           onExport={exportData}
           onImport={importUsage}
-          onUsageReportImported={handleUsageReportImported}
         />
       ) : null}
 

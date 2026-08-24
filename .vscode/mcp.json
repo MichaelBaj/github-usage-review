@@ -7,15 +7,6 @@
         "mcp-server-fetch"
       ],
       "env": {}
-    },
-    "github": {
-      "type": "stdio",
-      "command": "/opt/homebrew/bin/gh",
-      "args": [
-        "copilot",
-        "mcp-server"
-      ],
-      "env": {}
     }
   }
 }

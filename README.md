@@ -18,7 +18,7 @@ leaderboards, and 90-day projections.
     (for per-user AI-credit rollups via the enhanced-billing API)
 - Org admin role on the target GitHub organization
 
-### Enterprise Usage-Reports API Access (Required for "Enterprise Usage Reports" tab controls)
+### Enterprise Usage-Reports API Access (Required for Refresh All)
 
 When this README says "enterprise API access is enabled", it means all of the following are true:
 

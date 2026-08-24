@@ -73,40 +73,6 @@ export interface DbImportResult {
   tables: Record<string, number>;
 }
 
-export type UsageReportType = "detailed" | "summarized" | "premium_request" | "ai_credit";
-
-export interface UsageReportExport {
-  id: string;
-  report_type: UsageReportType;
-  start_date: string;
-  end_date: string;
-  status: "processing" | "completed" | "failed";
-  download_urls?: string[];
-  created_at?: string;
-  actor?: string;
-}
-
-export interface UsageReportListResponse {
-  enterprise: string;
-  exports: UsageReportExport[];
-}
-
-export interface UsageReportCreateRequest {
-  report_type: UsageReportType;
-  start_date: string;
-  end_date: string;
-  send_email?: boolean;
-}
-
-export interface UsageReportImportResponse {
-  report_id: string;
-  report_type: string;
-  start_date: string;
-  end_date: string;
-  status: string;
-  import: ImportResult;
-}
-
 export interface TrendPoint {
   date: string;
   active_users: number;
@@ -553,17 +519,13 @@ export interface AiCreditsProjection {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  // Prepend base path so API requests resolve under the same base prefix (/copilot/api/...)
-  const prefix = import.meta.env.BASE_URL.replace(/\/$/, "");
-  const fullPath = path.startsWith("/api") ? `${prefix}${path}` : path;
-  const r = await fetch(fullPath);
-  if (!r.ok) throw new Error(`${fullPath}: ${r.status} ${r.statusText}`);
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`${path}: ${r.status} ${r.statusText}`);
   return (await r.json()) as T;
 }
 
 function apiPath(path: string): string {
-  const prefix = import.meta.env.BASE_URL.replace(/\/$/, "");
-  return path.startsWith("/api") ? `${prefix}${path}` : path;
+  return path;
 }
 
 export const api = {
@@ -666,68 +628,6 @@ export const api = {
       throw new Error(`database import failed: ${detail}`);
     }
     return (await r.json()) as DbImportResult;
-  },
-  listUsageReports: () => getJson<UsageReportListResponse>("/api/usage-reports"),
-  createUsageReport: async (req: UsageReportCreateRequest): Promise<UsageReportExport> => {
-    const r = await fetch(apiPath("/api/usage-reports"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req),
-    });
-    if (!r.ok) {
-      let detail = `${r.status} ${r.statusText}`;
-      try {
-        const payload = (await r.json()) as { detail?: string };
-        detail = payload.detail ?? detail;
-      } catch {
-        // Keep the HTTP status fallback.
-      }
-      throw new Error(`create usage report failed: ${detail}`);
-    }
-    return (await r.json()) as UsageReportExport;
-  },
-  getUsageReport: (reportId: string) =>
-    getJson<UsageReportExport>(`/api/usage-reports/${encodeURIComponent(reportId)}`),
-  downloadUsageReport: async (reportId: string): Promise<void> => {
-    const r = await fetch(apiPath(`/api/usage-reports/${encodeURIComponent(reportId)}/download`));
-    if (!r.ok) {
-      let detail = `${r.status} ${r.statusText}`;
-      try {
-        const payload = (await r.json()) as { detail?: string };
-        detail = payload.detail ?? detail;
-      } catch {
-        // Keep the HTTP status fallback.
-      }
-      throw new Error(`usage report download failed: ${detail}`);
-    }
-    const blob = await r.blob();
-    const disposition = r.headers.get("Content-Disposition") ?? "";
-    const match = /filename="?([^\"]+)"?/.exec(disposition);
-    const filename = match?.[1] ?? "usage-report.csv";
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-  },
-  importUsageReport: async (reportId: string): Promise<UsageReportImportResponse> => {
-    const r = await fetch(apiPath(`/api/usage-reports/${encodeURIComponent(reportId)}/import`), {
-      method: "POST",
-    });
-    if (!r.ok) {
-      let detail = `${r.status} ${r.statusText}`;
-      try {
-        const payload = (await r.json()) as { detail?: string };
-        detail = payload.detail ?? detail;
-      } catch {
-        // Keep the HTTP status fallback.
-      }
-      throw new Error(`usage report import failed: ${detail}`);
-    }
-    return (await r.json()) as UsageReportImportResponse;
   },
   validateAdminToken: async (token: string): Promise<boolean> => {
     try {
