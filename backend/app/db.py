@@ -336,6 +336,13 @@ def get_latest_org_metrics_date() -> str | None:
         return str(value) if value else None
 
 
+def get_org_metrics_day_count() -> int:
+    """Return the total number of distinct days ever collected, unbounded by any window."""
+    with connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM daily_org_metrics").fetchone()
+        return int(row["n"]) if row else 0
+
+
 def upsert_org_day(
     date: str,
     total_active: int | None,

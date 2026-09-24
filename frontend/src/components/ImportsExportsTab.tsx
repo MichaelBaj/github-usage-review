@@ -41,33 +41,12 @@ export function ImportsExportsTab({
         <div className="ops-actions">
           <button
             onClick={() => {
-              void onRefresh();
-            }}
-            disabled={refreshing || importing}
-            className={snapshotDone === true ? "btn-success" : undefined}
-          >
-            {refreshing ? "Refreshing…" : snapshotDone === true ? "\u2713 Snapshot complete" : "Refresh snapshot"}
-          </button>
-          <button
-            onClick={() => {
               void onExport();
             }}
             disabled={exporting || importing || refreshing}
           >
             {exporting ? "Exporting…" : "Export data"}
           </button>
-          <label className={importing || refreshing ? "upload-button upload-disabled" : "upload-button"}>
-            {importing ? "Importing…" : "Import file"}
-            <input
-              type="file"
-              accept=".json,.jsonl,.ndjson,.csv,.db,.sqlite,.sqlite3,.gz,application/json,text/csv,application/csv,application/vnd.ms-excel,application/gzip,application/x-sqlite3"
-              disabled={importing || refreshing}
-              onChange={(event) => {
-                void onImport(event.target.files?.[0]);
-                event.currentTarget.value = "";
-              }}
-            />
-          </label>
         </div>
       </div>
 
@@ -110,7 +89,15 @@ export function ImportsExportsTab({
                 <td>{entry.lastLoaded}</td>
                 <td>{entry.source}</td>
                 <td>
-                  {entry.dataType === "NDJSON" ? (
+                  {entry.dataType === "API" ? (
+                    <button
+                      onClick={() => { void onRefresh(); }}
+                      disabled={refreshing || importing}
+                      className={snapshotDone === true ? "btn-success" : undefined}
+                    >
+                      {refreshing ? "Refreshing…" : snapshotDone === true ? "\u2713 Done" : "Refresh"}
+                    </button>
+                  ) : entry.dataType === "NDJSON" ? (
                     <label className={importing ? "upload-button upload-disabled" : "upload-button"}>
                       Import
                       <input
@@ -119,6 +106,32 @@ export function ImportsExportsTab({
                         disabled={importing}
                         onChange={(event) => {
                           void onImport(event.target.files?.[0], entry.source);
+                          event.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+                  ) : entry.dataType === "CSV" ? (
+                    <label className={importing ? "upload-button upload-disabled" : "upload-button"}>
+                      Import
+                      <input
+                        type="file"
+                        accept=".csv"
+                        disabled={importing}
+                        onChange={(event) => {
+                          void onImport(event.target.files?.[0], entry.source);
+                          event.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+                  ) : entry.dataType === "DB" ? (
+                    <label className={importing ? "upload-button upload-disabled" : "upload-button"}>
+                      Import
+                      <input
+                        type="file"
+                        accept=".db,.sqlite,.sqlite3,.gz"
+                        disabled={importing}
+                        onChange={(event) => {
+                          void onImport(event.target.files?.[0]);
                           event.currentTarget.value = "";
                         }}
                       />

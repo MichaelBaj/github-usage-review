@@ -764,7 +764,8 @@ def projections() -> dict[str, Any]:
     )
     return {
         "available": True,
-        "history_days": len(trend),
+        # Total days ever collected, not bounded by the 90-day trend window used for slope.
+        "history_days": db.get_org_metrics_day_count(),
         "current_active": ys[-1],
         "projected_active_90d": round(projected_active, 1),
         "trend_slope_per_day": round(slope, 3),

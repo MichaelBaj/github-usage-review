@@ -13,7 +13,7 @@ import { QualityTab } from "./components/QualityTab";
 import { ImportsExportsTab } from "./components/ImportsExportsTab";
 import { defaultWindowThisMonth, type WindowState } from "./components/DateRangeSelector";
 // Calendar-date versioning (YYYY-MM-DD.build)
-const VERSION = "2026-08-24.2";
+const VERSION = "2026-09-24.2";
 
 
 type Tab = "summary" | "teams" | "users" | "quality" | "imports-exports";
